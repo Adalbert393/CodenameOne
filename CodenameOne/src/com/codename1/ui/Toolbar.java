@@ -145,7 +145,7 @@ public class Toolbar extends Container {
     /**
      * Sets the side menu to "on-top" mode
      */
-    private static boolean onTopSideMenu;
+    private static boolean onTopSideMenu = true;
     
     private InteractionDialog sidemenuDialog;
     
@@ -159,6 +159,11 @@ public class Toolbar extends Container {
     private static boolean centeredDefault = true;
 
     private Command searchCommand;
+
+    /**
+     * Component placed on the bottom (south) portion of the permanent/on-top side menu. 
+     */
+    private Component sidemenuSouthComponent;
     
     /**
      * Empty Constructor
@@ -285,7 +290,7 @@ public class Toolbar extends Container {
      */
     public void closeSideMenu() {
         if(onTopSideMenu) {
-            if(sidemenuDialog.isShowing()) {
+            if(sidemenuDialog != null && sidemenuDialog.isShowing()) {
                 sidemenuDialog.disposeToTheLeft();
                 Style s = getComponentForm().getLayeredPane(Toolbar.class, false).getUnselectedStyle();
                 s.setBgTransparency(0);
@@ -790,7 +795,13 @@ public class Toolbar extends Container {
         if(permanentSideMenuContainer == null) {
             permanentSideMenuContainer = constructSideNavigationComponent();
             Form parent = getComponentForm();
-            parent.addComponentToForm(BorderLayout.WEST, permanentSideMenuContainer);
+            if(sidemenuSouthComponent != null) {
+                Container c = BorderLayout.center(permanentSideMenuContainer);
+                c.add(BorderLayout.SOUTH, sidemenuSouthComponent);
+                parent.addComponentToForm(BorderLayout.WEST, c);
+            } else {
+                parent.addComponentToForm(BorderLayout.WEST, permanentSideMenuContainer);
+            }
         }
     }
 
@@ -801,6 +812,9 @@ public class Toolbar extends Container {
             final Form parent = getComponentForm();
             parent.addPointerPressedListener(new ActionListener() {
                 public void actionPerformed(ActionEvent evt) {
+                    if (Display.getInstance().getImplementation().isScrollWheeling()) {
+                        return;
+                    }
                     if(sidemenuDialog.isShowing()) {
                         if(evt.getX() > sidemenuDialog.getWidth()) {
                             parent.putClientProperty("cn1$sidemenuCharged", Boolean.FALSE);
@@ -831,6 +845,9 @@ public class Toolbar extends Container {
             });
             parent.addPointerDraggedListener(new ActionListener() {
                 public void actionPerformed(ActionEvent evt) {
+                    if (Display.getInstance().getImplementation().isScrollWheeling()) {
+                        return;
+                    }
                     Boolean b = (Boolean)parent.getClientProperty("cn1$sidemenuCharged");
                     if(b != null && b.booleanValue()) {
                         parent.putClientProperty("cn1$sidemenuActivated", Boolean.TRUE);
@@ -846,6 +863,9 @@ public class Toolbar extends Container {
             });
             parent.addPointerReleasedListener(new ActionListener() {
                 public void actionPerformed(ActionEvent evt) {
+                    if (Display.getInstance().getImplementation().isScrollWheeling()) {
+                        return;
+                    }
                     Boolean b = (Boolean)parent.getClientProperty("cn1$sidemenuActivated");
                     if(b != null && b.booleanValue()) {
                         parent.putClientProperty("cn1$sidemenuActivated", null);
@@ -868,11 +888,14 @@ public class Toolbar extends Container {
             
             sidemenuDialog = new InteractionDialog(new BorderLayout());
             
-            // change this to true when stable
             sidemenuDialog.setFormMode(true);
             sidemenuDialog.setUIID("Container");
             sidemenuDialog.setDialogUIID("Container");
+            sidemenuDialog.getTitleComponent().remove();
             sidemenuDialog.add(BorderLayout.CENTER, permanentSideMenuContainer);
+            if(sidemenuSouthComponent != null) {
+                sidemenuDialog.add(BorderLayout.SOUTH, permanentSideMenuContainer);
+            }
             float size = 4.5f;
             try {
                 size = Float.parseFloat(getUIManager().getThemeConstant("menuImageSize", "4.5"));
@@ -881,15 +904,32 @@ public class Toolbar extends Container {
             }
             
             if (!parent.getUIManager().isThemeConstant("hideLeftSideMenuBool", false)) {
-                addMaterialCommandToLeftBar("", FontImage.MATERIAL_MENU, size, new ActionListener() {
-                    public void actionPerformed(ActionEvent evt) {
-                        if(sidemenuDialog.isShowing()) {
-                            closeSideMenu();
-                            return;
+                Image i = (Image) parent.getUIManager().getThemeImageConstant("sideMenuImage");
+                if(i != null) {
+                    Command cmd = addCommandToLeftBar("", i, new ActionListener() {
+                        public void actionPerformed(ActionEvent evt) {
+                            if(sidemenuDialog.isShowing()) {
+                                closeSideMenu();
+                                return;
+                            }
+                            showOnTopSidemenu(-1, false);
                         }
-                        showOnTopSidemenu(-1, false);
+                    });
+                    Image p = (Image) parent.getUIManager().getThemeImageConstant("sideMenuPressImage");
+                    if (p != null) {
+                        findCommandComponent(cmd).setPressedIcon(p);
                     }
-                });
+                } else {
+                    addMaterialCommandToLeftBar("", FontImage.MATERIAL_MENU, size, new ActionListener() {
+                        public void actionPerformed(ActionEvent evt) {
+                            if(sidemenuDialog.isShowing()) {
+                                closeSideMenu();
+                                return;
+                            }
+                            showOnTopSidemenu(-1, false);
+                        }
+                    });
+                }
             }
         }
     }
@@ -956,6 +996,9 @@ public class Toolbar extends Container {
         }
         sidemenuDialog.setRepositionAnimation(false);
         sidemenuDialog.layoutContainer();
+        if (!getUIManager().isThemeConstant("sideMenuTensileDragBool", true)) {
+            sidemenuDialog.getContentPane().setTensileDragEnabled(false);
+        }
         
         float f = ((float)v) / ((float)dw) * 80.0f;
         Style s = getComponentForm().getLayeredPane(Toolbar.class, false).getUnselectedStyle();
@@ -965,6 +1008,33 @@ public class Toolbar extends Container {
         sidemenuDialog.show(0, 0, 0, dw - actualV);
         if(draggedX > 0) {
             sidemenuDialog.setX(Math.min(0, draggedX - actualV));
+        }
+    }
+        
+    /**
+     * Places a component in the south portion (bottom) of the side menu. Notice this only works with on-top 
+     * side menu and the permanent side menu. Setting this value to null will remove the existing component. Only
+     * one component can be placed in the south but it can be a container that includes many components
+     * @param sidemenuSouthComponent the new component to place in the south or null to remove the current
+     * component
+     */
+    public void setComponentToSideMenuSouth(Component sidemenuSouthComponent) {
+        if(this.sidemenuSouthComponent != null) {
+            sidemenuSouthComponent.remove();
+        }
+        this.sidemenuSouthComponent = sidemenuSouthComponent;
+        if(this.sidemenuSouthComponent != null) {
+            if(sidemenuDialog != null) {
+                sidemenuDialog.add(BorderLayout.SOUTH, sidemenuSouthComponent);
+            } else {
+                if(permanentSideMenu && permanentSideMenuContainer != null) {
+                    Form parent = getComponentForm();
+                    parent.removeComponentFromForm(permanentSideMenuContainer);
+                    Container c = BorderLayout.center(permanentSideMenuContainer);
+                    c.add(BorderLayout.SOUTH, sidemenuSouthComponent);
+                    parent.addComponentToForm(BorderLayout.WEST, c);
+                }
+            }
         }
     }
     
@@ -1035,9 +1105,11 @@ public class Toolbar extends Container {
      */
     public Button findCommandComponent(Command c) {
         if(permanentSideMenu || onTopSideMenu) {
-            Button b = findCommandComponent(c, permanentSideMenuContainer);
-            if(b != null) {
-                return b;
+            if (permanentSideMenuContainer != null) {
+                Button b = findCommandComponent(c, permanentSideMenuContainer);
+                if(b != null) {
+                    return b;
+                }
             }
         }
         Button b = sideMenu.findCommandComponent(c);
@@ -1053,7 +1125,7 @@ public class Toolbar extends Container {
             Component current = cnt.getComponentAt(iter);
             if (current instanceof Button) {
                 Button b = (Button) current;
-                if (b.getCommand() == c) {
+                if (b.getCommand() == c || sideMenu.unwrapCommand(b.getCommand()) == c) {
                     return b;
                 }
             } else {
@@ -1158,7 +1230,10 @@ public class Toolbar extends Container {
                 continue;
             }
             if(c instanceof Button) {
-                cmds.add(((Button)c).getCommand());
+                Command b = ((Button)c).getCommand();
+                if(b != null) {
+                    cmds.add(b);
+                }
             }
         }
     }
@@ -1464,7 +1539,19 @@ public class Toolbar extends Container {
     
 
     class ToolbarSideMenu extends SideMenuBar {
-                
+
+        @Override
+        protected void removeCommand(Command cmd) {
+            super.removeCommand(cmd);
+            if(onTopSideMenu || permanentSideMenu) {
+                Button b = Toolbar.this.findCommandComponent(cmd);
+                if(b != null) {
+                    b.remove();
+                }
+            }
+        }
+
+        
         @Override
         protected Container createSideNavigationComponent(Vector commands, String placement) {
             return Toolbar.this.createSideNavigationComponent(commands, placement);

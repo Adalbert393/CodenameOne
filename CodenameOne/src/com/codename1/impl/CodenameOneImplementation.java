@@ -29,7 +29,6 @@ import com.codename1.components.FileTreeModel;
 import com.codename1.contacts.Contact;
 import com.codename1.db.Cursor;
 import com.codename1.db.Database;
-import com.codename1.db.Row;
 import com.codename1.io.ConnectionRequest;
 import com.codename1.io.Cookie;
 import com.codename1.io.FileSystemStorage;
@@ -74,12 +73,8 @@ import java.lang.ref.WeakReference;
 import java.util.ArrayList;
 
 import java.util.Enumeration;
-import java.util.HashMap;
-import java.util.HashSet;
 import java.util.Hashtable;
 import java.util.Map;
-import java.util.Timer;
-import java.util.TimerTask;
 import java.util.Vector;
 
 /**
@@ -1068,6 +1063,7 @@ public abstract class CodenameOneImplementation {
         ConnectionRequest cr = new ConnectionRequest();
         cr.setPost(false);
         cr.setFailSilently(true);
+        cr.setReadResponseForErrors(false);
         cr.setDuplicateSupported(true);
         cr.setUrl(url);
         cr.downloadImageToStorage(fileName, onSuccess, onFail);
@@ -1089,6 +1085,7 @@ public abstract class CodenameOneImplementation {
         ConnectionRequest cr = new ConnectionRequest();
         cr.setPost(false);
         cr.setFailSilently(true);
+        cr.setReadResponseForErrors(false);
         cr.setDuplicateSupported(true);
         cr.setUrl(url);
         cr.downloadImageToFileSystem(fileName, onSuccess, onFail);
@@ -1293,6 +1290,10 @@ public abstract class CodenameOneImplementation {
     public boolean isAntiAliasingSupported() {
         return false;
     }
+    
+    public boolean isAntiAliasingSupported(Object graphics) {
+        return isAntiAliasingSupported();
+    }
 
     /**
      * Indicates whether the underlying implementation allows for anti-aliased fonts
@@ -1301,6 +1302,10 @@ public abstract class CodenameOneImplementation {
      */
     public boolean isAntiAliasedTextSupported() {
         return false;
+    }
+    
+    public boolean isAntiAliasedTextSupported(Object graphics) {
+        return isAntiAliasedTextSupported();
     }
 
     /**
@@ -3870,6 +3875,59 @@ public abstract class CodenameOneImplementation {
     public PeerComponent createBrowserComponent(Object browserComponent) {
         return null;
     }
+    
+    /**
+     * <p>Creates a native overlay for the given component. A native overlay is a native component
+     * that is always present over the given component.  It can be used to help processing user 
+     * events in a more native way.  In the Javascript port, native overlays are used on TextFields, for example,
+     * so that users can tap on the text field and activate the keyboard.  This was necessary because
+     * iOS doesn't allow us to programmatically activate the keyboard.  Without a native overlay, 
+     * the user would first have to tap the lightweight keyboard - upon which we create a native text
+     * field, and then the user would have to tap again to activate the keyboard.  Using native
+     * overlays in that case yields better UX.</p>
+     * 
+     * <p>When using native overlays, you will need to implement {@link #createNativeOverlay(com.codename1.ui.Component) },
+     * {@link #hideNativeOverlay(com.codename1.ui.Component, java.lang.Object) }, and {@link #updateNativeOverlay(com.codename1.ui.Component, java.lang.Object) }.
+     * {@link #createNativeOverlay(com.codename1.ui.Component) } is called in {@link Component#initComponent() } (i.e. when the component is added to the form). 
+     * This is where you would create the native view and add it to the native view hierarchy above the CN1 canvas.
+     * {@link #updateNativeOverlay(com.codename1.ui.Component, java.lang.Object) } is called in {@link Component#laidOut() } (i.e. when the component is resized/positioned).   
+     * This is where you can reposition the native view or change its properties to be appropriate for the "occasion". {@link #hideNativeOverlay(com.codename1.ui.Component, java.lang.Object) }
+     * is called in {@link Component#deinitialize() } (i.e. when the component is removed from the form).  You should destroy the native view and remove it from the native view hierarchy here.
+     * 
+     * 
+     * @param cmp The component to create the overlay for.
+     * @return A native object.  The object type/format is decided by the implementation.
+     * @see #hideNativeOverlay(com.codename1.ui.Component, java.lang.Object) 
+     * @see #updateNativeOverlay(com.codename1.ui.Component, java.lang.Object) 
+     * @see Component#showNativeOverlay() 
+     */
+    public Object createNativeOverlay(Component cmp) {
+        return null;
+    }
+    
+    /**
+     * Hides the native overlay for a component.
+     * @param cmp The component
+     * @param nativeOverlay The native overlay.
+     * @see #createNativeOverlay(com.codename1.ui.Component) 
+     * @see #updateNativeOverlay(com.codename1.ui.Component, java.lang.Object) 
+     * @see Component#hideNativeOverlay() 
+     */
+    public void hideNativeOverlay(Component cmp, Object nativeOverlay) {
+        
+    }
+    
+    /**
+     * Updates the native overlay after the component has been repositioned.
+     * @param cmp The component
+     * @param nativeOverlay The native overlay
+     * @see #createNativeOverlay(com.codename1.ui.Component) 
+     * @see #hideNativeOverlay(com.codename1.ui.Component, java.lang.Object) 
+     * @see Component#updateNativeOverlay()
+     */
+    public void updateNativeOverlay(Component cmp, Object nativeOverlay) {
+        
+    }
 
     /**
      * This method allows customizing the properties of a web view in various ways including platform specific settings.
@@ -4161,6 +4219,33 @@ public abstract class CodenameOneImplementation {
         return true;
     }
 
+    private void purgeOldCookies(Map<String,Cookie> cookies) {
+        long now = System.currentTimeMillis();
+        for (Map.Entry<String,Cookie> e : cookies.entrySet()) {
+            if (e.getValue().getExpires() != 0 && e.getValue().getExpires() < now) {
+                cookies.remove(e.getKey());
+            }
+        }
+    }
+    
+    protected final void removeCookiesForDomain(String domain) {
+	if(cookies == null || domain==null){
+            return;
+        }
+        Hashtable h = (Hashtable)cookies.get(domain);
+        if (h == null) {
+            return;
+        }
+        h.clear();
+        if(Cookie.isAutoStored()){
+            if(Storage.getInstance().exists(Cookie.STORAGE_NAME)){
+                Storage.getInstance().deleteStorageFile(Cookie.STORAGE_NAME);
+            }
+            Storage.getInstance().writeObject(Cookie.STORAGE_NAME, cookies);
+        }
+        
+    }
+    
     public void addCookie(Cookie [] cookiesArray) {
         if(cookies == null){
             cookies = new Hashtable();
@@ -4173,7 +4258,12 @@ public abstract class CodenameOneImplementation {
                 h = new Hashtable();
                 cookies.put(cookie.getDomain(), h);
             }
-            h.put(cookie.getName(), cookie);
+            purgeOldCookies(h);
+            if (cookie.getExpires() != 0 && cookie.getExpires() < System.currentTimeMillis()) {
+                h.remove(cookie.getName());
+            } else {
+                h.put(cookie.getName(), cookie);
+            }
         }
         
         if(Cookie.isAutoStored()){
@@ -4987,6 +5077,8 @@ public abstract class CodenameOneImplementation {
         return null;
     }
 
+    
+    
     /**
      * Allows buggy implementations (Android) to release image objects  
      * @param image native image object
@@ -5960,6 +6052,7 @@ public abstract class CodenameOneImplementation {
             };
             r.setPost(false);
             r.setFailSilently(true);
+            r.setReadResponseForErrors(false);
             r.setUrl(Display.getInstance().getProperty("cloudServerURL", "https://codename-one.appspot.com/") + "registerPush");
             long val = Preferences.get("push_id", (long)-1);
             if(val > -1) {

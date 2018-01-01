@@ -77,9 +77,18 @@
 // needs a source rect that the java API doesn't pass through.
 int CN1lastTouchX=0;
 int CN1lastTouchY=0;
+BOOL skipNextTouch = NO;
+
+// A flag to enable/disable the CN1TapGestureRecognizer for handling pointer events
+// The new way of handing pointer events is with the gesture recognizer rather 
+// than directly in the view controller because it can catch all events without
+// consuming them, so it plays nicer with native peer components.
+// This flag is turned on by [CN1TapGestureRecognizer install:]
+BOOL CN1useTapGestureRecognizer=NO;
 
 extern void repaintUI();
 extern NSDate* currentDatePickerDate;
+extern JAVA_LONG currentDatePickerDuration;
 extern bool datepickerPopover;
 //int lastWindowSize = -1;
 extern void stringEdit(int finished, int cursorPos, NSString* text);
@@ -680,6 +689,12 @@ void Java_com_codename1_impl_ios_IOSImplementation_nativeDrawRoundRectMutableImp
     if (currentMutableTransformSet) {
         CGContextRestoreGState(context);
     }
+}
+
+void Java_com_codename1_impl_ios_IOSImplementation_setAntiAliasedMutableImpl
+(JAVA_BOOLEAN antialiased) {
+    CGContextRef context = UIGraphicsGetCurrentContext();
+    CGContextSetAllowsAntialiasing(context, antialiased);
 }
 
 void Java_com_codename1_impl_ios_IOSImplementation_resetAffineGlobal() {
@@ -2738,9 +2753,15 @@ BOOL prefersStatusBarHidden = NO;
     }
 }
 
-static BOOL skipNextTouch = NO;
+
 
 -(void)touchesBegan:(NSSet *)touches withEvent:(UIEvent *)event {
+    if (CN1useTapGestureRecognizer) {
+        // We moved to using a CN1TapGestureRecognizer to handle pointer
+        // events rather than the view controller because it is able to 
+        // catch all events, even ones that land on a native peer.
+        return;
+    }
 	POOL_BEGIN();
     if(touchesArray == nil) {
         touchesArray = [[NSMutableArray alloc] init];
@@ -2801,6 +2822,12 @@ static BOOL skipNextTouch = NO;
 }
 
 -(void)touchesCancelled:(NSSet *)touches withEvent:(UIEvent *)event {
+    if (CN1useTapGestureRecognizer) {
+        // We moved to using a CN1TapGestureRecognizer to handle pointer
+        // events rather than the view controller because it is able to 
+        // catch all events, even ones that land on a native peer.
+        return;
+    }
     if(skipNextTouch) {
         skipNextTouch = NO;
         return;
@@ -2831,6 +2858,12 @@ static BOOL skipNextTouch = NO;
 }
 
 -(void)touchesEnded:(NSSet *)touches withEvent:(UIEvent *)event {
+    if (CN1useTapGestureRecognizer) {
+        // We moved to using a CN1TapGestureRecognizer to handle pointer
+        // events rather than the view controller because it is able to 
+        // catch all events, even ones that land on a native peer.
+        return;
+    }
     if(skipNextTouch) {
         skipNextTouch = NO;
         return;
@@ -2867,6 +2900,12 @@ static BOOL skipNextTouch = NO;
 }
 
 -(void)touchesMoved:(NSSet *)touches withEvent:(UIEvent *)event {
+    if (CN1useTapGestureRecognizer) {
+        // We moved to using a CN1TapGestureRecognizer to handle pointer
+        // events rather than the view controller because it is able to 
+        // catch all events, even ones that land on a native peer.
+        return;
+    }
     if(skipNextTouch || (editingComponent != nil && !isVKBAlwaysOpen())) {
         return;
     }
@@ -2917,67 +2956,48 @@ extern int popoverSupported();
 
 //#define LOW_MEM_CAMERA
 - (void)imagePickerController:(UIImagePickerController*)picker didFinishPickingMediaWithInfo:(NSDictionary*)info {
-	POOL_BEGIN();
-	NSString* mediaType = [info objectForKey:UIImagePickerControllerMediaType];
-	if ([mediaType isEqualToString:@"public.image"]) {
-		// get the image
-		UIImage* originalImage = [info objectForKey:UIImagePickerControllerOriginalImage];
-#ifndef CN1_USE_ARC
-        [originalImage retain];
-#endif
-        dispatch_async(dispatch_get_global_queue(DISPATCH_QUEUE_PRIORITY_DEFAULT, 0), ^{
-            POOL_BEGIN();
-            UIImage* image = originalImage;
-            BOOL releaseImage = YES;
+
+    NSString* mediaType = [info objectForKey:UIImagePickerControllerMediaType];
+    if ([mediaType isEqualToString:@"public.image"]) {
+        // get the image
+        UIImage* originalImage = [info objectForKey:UIImagePickerControllerOriginalImage];
+
+        UIImage* image = originalImage;
+
 #ifndef LOW_MEM_CAMERA
-            if (image.imageOrientation != UIImageOrientationUp) {
-                UIGraphicsBeginImageContextWithOptions(image.size, NO, image.scale);
-                [image drawInRect:(CGRect){0, 0, image.size}];
-                releaseImage = NO;
-#ifndef CN1_USE_ARC
-                [originalImage release];
+        if (image.imageOrientation != UIImageOrientationUp) {
+            UIGraphicsBeginImageContextWithOptions(image.size, NO, image.scale);
+            [image drawInRect:(CGRect){0, 0, image.size}];
+            image = UIGraphicsGetImageFromCurrentImageContext();
+            UIGraphicsEndImageContext();
+        }
 #endif
-                image = UIGraphicsGetImageFromCurrentImageContext();
-                UIGraphicsEndImageContext();
-            }
-#endif
-            
-            NSData* data = UIImageJPEGRepresentation(image, 90 / 100.0f);
-            
-            NSArray *paths = NSSearchPathForDirectoriesInDomains(NSDocumentDirectory, NSUserDomainMask, YES);
-            NSString *documentsDirectory = [paths objectAtIndex:0];
-            NSString *path = [documentsDirectory stringByAppendingPathComponent:@"temp_image.jpg"];
-            [data writeToFile:path atomically:YES];
-            if(releaseImage) {
-#ifndef CN1_USE_ARC
-                [originalImage release];
-#endif
-            }
-            com_codename1_impl_ios_IOSImplementation_capturePictureResult___java_lang_String(CN1_THREAD_GET_STATE_PASS_ARG fromNSString(CN1_THREAD_GET_STATE_PASS_ARG path));
-            POOL_END();
-        });
         
-	} else {
+        NSData* data = UIImageJPEGRepresentation(image, 90 / 100.0f);
+        
+        NSArray *paths = NSSearchPathForDirectoriesInDomains(NSDocumentDirectory, NSUserDomainMask, YES);
+        NSString *documentsDirectory = [paths objectAtIndex:0];
+        NSString *path = [documentsDirectory stringByAppendingPathComponent:@"temp_image.jpg"];
+        [data writeToFile:path atomically:YES];
+        com_codename1_impl_ios_IOSImplementation_capturePictureResult___java_lang_String(CN1_THREAD_GET_STATE_PASS_ARG fromNSString(CN1_THREAD_GET_STATE_PASS_ARG path));
+    
+        
+    } else {
         // was movie type
         NSString *moviePath = [[info objectForKey: UIImagePickerControllerMediaURL] absoluteString];
         com_codename1_impl_ios_IOSImplementation_captureMovieResult___java_lang_String(CN1_THREAD_GET_STATE_PASS_ARG fromNSString(CN1_THREAD_GET_STATE_PASS_ARG moviePath));
     }
-	
-	if(popoverSupported() && popoverController != nil) {
-		[popoverController dismissPopoverAnimated:YES];
-        popoverController.delegate = nil;
-        popoverController = nil;
-	} else {
-#ifdef LOW_MEM_CAMERA
-		[picker dismissModalViewControllerAnimated:NO];
-#else
-		[picker dismissModalViewControllerAnimated:YES];
-#endif
-	}
     
-	//picker.delegate = nil;
-    //picker = nil;
-    POOL_END();
+    if(popoverSupported() && popoverController != nil) {
+        [popoverController dismissPopoverAnimated:YES];
+    } else {
+#ifdef LOW_MEM_CAMERA
+        [picker dismissModalViewControllerAnimated:NO];
+#else
+        [picker dismissModalViewControllerAnimated:YES];
+#endif
+    }
+
 }
 
 -(void) mailComposeController:(MFMailComposeViewController*)controller didFinishWithResult:(MFMailComposeResult)result error:(NSError*)error {
@@ -3157,12 +3177,17 @@ extern SKPayment *paymentInstance;
 }
 
 - (void)datePickerChangeDate:(UIDatePicker *)sender {
+    if (sender.datePickerMode == UIDatePickerModeCountDownTimer) {
+        currentDatePickerDuration = sender.countDownDuration * 1000;
+        return;
+    } 
     if(currentDatePickerDate != nil) {
 #ifndef CN1_USE_ARC
         [currentDatePickerDate release];
 #endif
     }
     currentDatePickerDate = sender.date;
+    
 #ifndef CN1_USE_ARC
     [currentDatePickerDate retain];
 #endif
@@ -3176,6 +3201,11 @@ extern JAVA_OBJECT pickerStringArray;
 #endif
 extern JAVA_LONG defaultDatePickerDate;
 - (void)actionSheet:(UIActionSheet *)actionSheet didDismissWithButtonIndex:(NSInteger)buttonIndex {
+    if (currentDatePickerDuration >= 0) {
+        com_codename1_impl_ios_IOSImplementation_datePickerResult___long(CN1_THREAD_GET_STATE_PASS_ARG currentDatePickerDuration);
+        currentDatePickerDuration = -1;
+        return;
+    }
     if(currentDatePickerDate == nil) {
         if(pickerStringArray == nil) {
             com_codename1_impl_ios_IOSImplementation_datePickerResult___long(CN1_THREAD_GET_STATE_PASS_ARG -1);
@@ -3200,6 +3230,7 @@ extern JAVA_LONG defaultDatePickerDate;
     if (currentActionSheet != nil) {
         com_codename1_impl_ios_IOSImplementation_datePickerResult___long(CN1_THREAD_GET_STATE_PASS_ARG -1);
         currentDatePickerDate = nil;
+        currentDatePickerDuration = -1;
         pickerStringArray = nil;
         NSArray* arr = [CodenameOne_GLViewController instance].view.subviews;
         UIView* v = (UIView*)[arr objectAtIndex:0];
@@ -3210,7 +3241,10 @@ extern JAVA_LONG defaultDatePickerDate;
 }
 
 - (void)datePickerDismiss {
-    if(currentDatePickerDate == nil) {
+    if (currentDatePickerDuration >= 0) {
+        com_codename1_impl_ios_IOSImplementation_datePickerResult___long(CN1_THREAD_GET_STATE_PASS_ARG currentDatePickerDuration);
+        currentDatePickerDuration = -1;
+    } else if(currentDatePickerDate == nil) {
         if(pickerStringArray == nil) {
             com_codename1_impl_ios_IOSImplementation_datePickerResult___long(CN1_THREAD_GET_STATE_PASS_ARG -1);
         } else {
@@ -3237,7 +3271,10 @@ extern JAVA_LONG defaultDatePickerDate;
     UISegmentedControl* s = sender;
     UIActionSheet* sheet = (UIActionSheet*)[s superview];
     [sheet dismissWithClickedButtonIndex:0 animated:YES];
-    if(currentDatePickerDate == nil) {
+    if (currentDatePickerDuration >= 0) {
+        com_codename1_impl_ios_IOSImplementation_datePickerResult___long(CN1_THREAD_GET_STATE_PASS_ARG currentDatePickerDuration);
+        currentDatePickerDuration = -1;
+    } else if(currentDatePickerDate == nil) {
         if(pickerStringArray == nil) {
             com_codename1_impl_ios_IOSImplementation_datePickerResult___long(CN1_THREAD_GET_STATE_PASS_ARG -1);
         } else {
@@ -3259,7 +3296,12 @@ UIPopoverController* popoverControllerInstance;
     if(popoverControllerInstance != nil) {
         [popoverControllerInstance dismissPopoverAnimated:YES];
         popoverControllerInstance = nil;
-        if(currentDatePickerDate == nil) {
+        if (currentDatePickerDuration >= 0) {
+            com_codename1_impl_ios_IOSImplementation_datePickerResult___long(CN1_THREAD_GET_STATE_PASS_ARG currentDatePickerDuration);
+            currentDatePickerDuration = -1;
+            defaultDatePickerDate = nil;
+            currentDatePickerDate = nil;
+        } else if(currentDatePickerDate == nil) {
             if(pickerStringArray == nil) {
                 if(defaultDatePickerDate != 0) {
                     com_codename1_impl_ios_IOSImplementation_datePickerResult___long(CN1_THREAD_GET_STATE_PASS_ARG defaultDatePickerDate);

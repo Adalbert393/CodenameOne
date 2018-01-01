@@ -900,7 +900,7 @@ public class IOSImplementation extends CodenameOneImplementation {
     static boolean hitTest(int x, int y) {
         Form f = Display.getInstance().getCurrent();
         if (f != null) {
-            Component cmp = f.getComponentAt(x, y);
+            Component cmp = f.getResponderAt(x, y);
             return cmp == null || !(cmp instanceof PeerComponent);
         }
         return true;
@@ -3046,6 +3046,8 @@ public class IOSImplementation extends CodenameOneImplementation {
         private boolean nativePlayer;
         private long moviePlayerPeer;
         private boolean fullScreen;
+        private boolean embedNativeControls=true;
+        
         
         public IOSMedia(String uri, boolean isVideo, Runnable onCompletion) {
             this.uri = uri;
@@ -3074,7 +3076,9 @@ public class IOSImplementation extends CodenameOneImplementation {
         @Override
         public void play() {
             if(isVideo) {
-                if(nativePlayer) {
+                if(component == null && nativePlayer) {
+                    // Mass source of confusion.  If getVideoComponent() has been called, then
+                    // we can't use the native player.
                     if(uri != null) {
                         moviePlayerPeer = nativeInstance.createNativeVideoComponent(uri, onCompletionCallbackId);
                     } else {
@@ -3201,6 +3205,7 @@ public class IOSImplementation extends CodenameOneImplementation {
             if (component == null) {
                 if(uri != null) {
                     moviePlayerPeer = nativeInstance.createVideoComponent(uri, onCompletionCallbackId);
+                    nativeInstance.setNativeVideoControlsEmbedded(moviePlayerPeer, embedNativeControls);
                     component = PeerComponent.create(new long[] { nativeInstance.getVideoViewPeer(moviePlayerPeer) });
                 } else {
                     try {
@@ -3270,6 +3275,12 @@ public class IOSImplementation extends CodenameOneImplementation {
             }
             if(key.equals(Media.VARIABLE_BACKGROUND_TITLE)) {
                 nativeInstance.setMediaBgTitle((String)value);
+            }
+            if(Media.VARIABLE_NATIVE_CONTRLOLS_EMBEDDED.equals(key) && value instanceof Boolean) {
+                embedNativeControls = (Boolean)value;
+                if (moviePlayerPeer != 0) {
+                    nativeInstance.setNativeVideoControlsEmbedded(moviePlayerPeer, (Boolean)value);
+                }
             }
         }
 
@@ -3661,7 +3672,41 @@ public class IOSImplementation extends CodenameOneImplementation {
         boolean transformApplied = false;
         ClipShape[] clipStack = new ClipShape[20];
         private int clipStackPtr = 0; 
+        private boolean antialiased;
+        private boolean antialiasedSet;
+        private boolean antialiasedText;
+        private boolean antialiasedTextSet;
         
+        boolean isAntiAliasingSupported() {
+            return true;
+        }
+
+        boolean isAntiAliasTextSupported() {
+            return true;
+        }
+        
+        void setAntiAliasedText(boolean a) {
+            antialiasedText = a;
+            antialiasedTextSet = true;
+            
+        }
+        
+        boolean isAntiAliasedText() {
+            return !antialiasedTextSet || antialiasedText;
+        }
+        
+        void setAntiAliased(boolean antialiased) {
+            antialiasedSet = true;
+            this.antialiased = antialiased;
+            nativeInstance.setAntiAliasedMutable(antialiased);
+        }
+        
+        
+        boolean isAntiAliased() {
+            // If antialiasing hasn't been set, then it defaults to 
+            // antialiased
+            return !antialiasedSet || antialiased;
+        }
         
         void setClip(Shape newClip) {
             if ( clip == null) {
@@ -3997,7 +4042,17 @@ public class IOSImplementation extends CodenameOneImplementation {
         }
 
         void nativeDrawString(int color, int alpha, long fontPeer, String str, int x, int y) {
+            boolean antialiasTextChanged = false;
+            if (isAntiAliased() != isAntiAliasedText()) {
+                // We want text to be antialiased
+                antialiasTextChanged = true;
+                setAntiAliased(isAntiAliasedText());
+                
+            }
             nativeDrawStringMutable(color, alpha, fontPeer, str, x, y);
+            if (antialiasTextChanged) {
+                setAntiAliased(!isAntiAliasedText());
+            }
         }
 
         void nativeDrawImage(long peer, int alpha, int x, int y, int width, int height) {
@@ -4201,9 +4256,52 @@ public class IOSImplementation extends CodenameOneImplementation {
         public void nativeClearRect(int x, int y, int width, int height) {
             nativeInstance.clearRectMutable(x, y, width, height);
         }
+
+        
     }
 
     class GlobalGraphics extends NativeGraphics {
+
+        @Override
+        void setAntiAliased(boolean antialiased) {
+            // Don't do anything here because the global graphcis doesn't support antialiasing.
+        }
+
+        @Override
+        boolean isAntiAliased() {
+            // Currently global graphics doesn't support antialiasing.
+            return false;
+        }
+        
+        @Override
+        boolean isAntiAliasingSupported() {
+            // Currently global graphics are drawn with opengl
+            // and don't support antialiasing on drawLine, drawRect, functions
+            // etc...
+            return false;
+        }
+
+        @Override
+        boolean isAntiAliasTextSupported() {
+            
+            // In global context antialias text is the default, and we don't
+            // support turning it off right now.  I guess the most appropriate
+            // value here is "false" to indicate that this setting
+            // can't be manipulated
+            return false;
+        }
+
+        @Override
+        void setAntiAliasedText(boolean a) {
+            
+        }
+
+        @Override
+        boolean isAntiAliasedText() {
+            // Currently text is always antialiased in global context.
+            return true;
+        }
+        
         public void applyPaint() {
             if (paint != null && paint instanceof RadialGradient) {
                 RadialGradient g = (RadialGradient)paint;
@@ -5270,14 +5368,13 @@ public class IOSImplementation extends CodenameOneImplementation {
 
     @Override
     public boolean isAntiAliased(Object graphics) {
-        // TODO
-        return super.isAntiAliased(graphics);
+        return ((NativeGraphics)graphics).isAntiAliased();
     }
+    
 
     @Override
     public boolean isAntiAliasedText(Object graphics) {
-        // TODO
-        return super.isAntiAliasedText(graphics);
+        return ((NativeGraphics)graphics).isAntiAliasedText();
     }
 
     @Override
@@ -5286,8 +5383,17 @@ public class IOSImplementation extends CodenameOneImplementation {
     }
 
     @Override
+    public boolean isAntiAliasedTextSupported(Object graphics) {
+        return ((NativeGraphics)graphics).isAntiAliasTextSupported();
+    }
+    
+    @Override
     public boolean isAntiAliasingSupported() {
         return true;
+    }
+    
+    public boolean isAntiAliasingSupported(Object graphics) {
+        return ((NativeGraphics)graphics).isAntiAliasingSupported();
     }
 
     @Override
@@ -5624,14 +5730,12 @@ public class IOSImplementation extends CodenameOneImplementation {
 
     @Override
     public void setAntiAliased(Object graphics, boolean a) {
-        // TODO
-        super.setAntiAliased(graphics, a);
+        ((NativeGraphics)graphics).setAntiAliased(a);
     }
 
     @Override
     public void setAntiAliasedText(Object graphics, boolean a) {
-        // TODO
-        super.setAntiAliasedText(graphics, a);
+        ((NativeGraphics)graphics).setAntiAliasedText(a);
     }
 
     /*@Override
@@ -7585,7 +7689,7 @@ public class IOSImplementation extends CodenameOneImplementation {
 
     @Override
     public boolean isNativePickerTypeSupported(int pickerType) {
-        return pickerType == Display.PICKER_TYPE_DATE || pickerType == Display.PICKER_TYPE_TIME || pickerType == Display.PICKER_TYPE_DATE_AND_TIME || pickerType == Display.PICKER_TYPE_STRINGS;
+        return pickerType == Display.PICKER_TYPE_DATE || pickerType == Display.PICKER_TYPE_TIME || pickerType == Display.PICKER_TYPE_DATE_AND_TIME || pickerType == Display.PICKER_TYPE_STRINGS || pickerType == Display.PICKER_TYPE_DURATION;
     }
     
     private static long datePickerResult;
@@ -7628,6 +7732,24 @@ public class IOSImplementation extends CodenameOneImplementation {
                 }
             }
             nativeInstance.openStringPicker(strs, offset, x, y, w, h, preferredWidth, preferredHeight);
+        } else if (type == Display.PICKER_TYPE_DURATION) {
+            long time;
+            if (currentValue instanceof Long) {
+                time = (Long)currentValue;
+            } else {
+                time = 0l;
+            }
+            int minuteStep = 5;
+            if (data instanceof String) {
+                String strData = (String)data;
+                String[] parts = Util.split(strData, "\n");
+                for (String part : parts) {
+                    if (part.indexOf("minuteStep=") != -1) {
+                        minuteStep = Integer.parseInt(part.substring(part.indexOf("=")+1));
+                    }
+                }
+            }
+            nativeInstance.openDatePicker(type, time, x, y, w, h, preferredWidth, preferredHeight, minuteStep);
         } else {
             long time;
             if(currentValue instanceof Integer) {
@@ -7640,7 +7762,7 @@ public class IOSImplementation extends CodenameOneImplementation {
             } else {
                 time = new java.util.Date().getTime();
             }
-            nativeInstance.openDatePicker(type, time, x, y, w, h, preferredWidth, preferredHeight);
+            nativeInstance.openDatePicker(type, time, x, y, w, h, preferredWidth, preferredHeight, 5);
         }
         // wait for the native code to complete
         Display.getInstance().invokeAndBlock(new Runnable() {
@@ -7671,6 +7793,12 @@ public class IOSImplementation extends CodenameOneImplementation {
             return ((String[])data)[(int)datePickerResult];
         }
         Object result;
+        if (type == Display.PICKER_TYPE_DURATION || type == Display.PICKER_TYPE_DURATION_HOURS || type == Display.PICKER_TYPE_DURATION_MINUTES) {
+            if (datePickerResult < 0) {
+                return null;
+            }
+            return new Long(datePickerResult);
+        }
         if(type == Display.PICKER_TYPE_TIME) {
             java.util.Calendar c = java.util.Calendar.getInstance();
             c.setTime(new Date(datePickerResult));

@@ -243,7 +243,7 @@ public class AndroidImplementation extends CodenameOneImplementation implements 
     private static int belowSpacing;
     public static boolean asyncView = false;
     public static boolean textureView = false;
-    private Media background;
+    private AudioService background;
     private boolean asyncEditMode = false;
     private boolean compatPaintMode;
     private MediaRecorder recorder = null;
@@ -2642,40 +2642,57 @@ public class AndroidImplementation extends CodenameOneImplementation implements 
         return true;
     }
     
-   
+    private int nextMediaId;
     @Override
-    public Media createBackgroundMedia(String uri) throws IOException {
+    public Media createBackgroundMedia(final String uri) throws IOException {
+        int mediaId = nextMediaId++;
+
 
         Intent serviceIntent = new Intent(getContext(), AudioService.class);
         serviceIntent.putExtra("mediaLink", uri);
-        
+        serviceIntent.putExtra("mediaId", mediaId);
         final ServiceConnection mConnection = new ServiceConnection() {
 
             public void onServiceDisconnected(ComponentName name) {
+
                 background = null;
             }
 
             public void onServiceConnected(ComponentName name, IBinder service) {
                 AudioService.LocalBinder mLocalBinder = (AudioService.LocalBinder) service;
-                background = mLocalBinder.getService();
+                AudioService svc = (AudioService)mLocalBinder.getService();
+                background = svc;
             }
         };
 
-        getContext().bindService(serviceIntent, mConnection, getContext().BIND_AUTO_CREATE);
+        boolean boundSuccess = getContext().bindService(serviceIntent, mConnection, getContext().BIND_AUTO_CREATE);
+        if (!boundSuccess) {
+            throw new RuntimeException("Failed to bind background media service for uri "+uri);
+        }
         getContext().startService(serviceIntent);
-        Display.getInstance().invokeAndBlock(new Runnable() {
-            @Override
-            public void run() {
-                while (background == null) {
-                    try {
-                        Thread.sleep(200);
-                    } catch (InterruptedException ex) {
-                    }
+        while (background == null) {
+            Display.getInstance().invokeAndBlock(new Runnable() {
+                @Override
+                public void run() {
+                    Util.sleep(200);
                 }
-            }
-        });
+            });
+        }
 
-        Media retVal = new MediaProxy(background) {
+        while (background.getMedia(mediaId) == null) {
+            Display.getInstance().invokeAndBlock(new Runnable() {
+                public void run() {
+                    Util.sleep(200);
+                }
+
+            });
+        }
+        Media ret = new MediaProxy(background.getMedia(mediaId)) {
+
+            @Override
+            public void play() {
+                super.play();
+            }
 
             @Override
             public void cleanup() {
@@ -2683,7 +2700,8 @@ public class AndroidImplementation extends CodenameOneImplementation implements 
                 getContext().unbindService(mConnection);
             }
         };
-        return retVal;
+        return ret;
+
     }
 
     
@@ -3732,7 +3750,7 @@ public class AndroidImplementation extends CodenameOneImplementation implements 
             url = "file:///android_asset"+url;
         }
         AndroidImplementation.AndroidBrowserComponent bc = (AndroidImplementation.AndroidBrowserComponent) browserPeer;
-        if(bc.parent.getBrowserNavigationCallback().shouldNavigate(url)) {
+        if(bc.parent.fireBrowserNavigationCallbacks(url)) {
             bc.setURL(url);
         }
     }
@@ -3982,6 +4000,60 @@ public class AndroidImplementation extends CodenameOneImplementation implements 
         return orientation == Configuration.ORIENTATION_PORTRAIT;
     }
 
+    @Override
+    public void clearNativeCookies() {
+        CookieManager mgr = getCookieManager();
+        mgr.removeAllCookie();
+    }
+    private static CookieManager cookieManager;
+    private static CookieManager getCookieManager() {
+        if (android.os.Build.VERSION.SDK_INT >= 21) {
+            return CookieManager.getInstance();
+        }
+        if (cookieManager == null) {
+            CookieSyncManager.createInstance(getContext()); // Fixes a crash on Android 4.3
+                                                                // https://stackoverflow.com/a/20552998/2935174
+            cookieManager = CookieManager.getInstance();
+        }
+        return CookieManager.getInstance();
+    }
+    
+    @Override
+    public Vector getCookiesForURL(String url) {
+        if (isUseNativeCookieStore()) {
+            try {
+                URI uri = new URI(url);
+                
+                
+                CookieManager mgr = getCookieManager();
+                mgr.removeExpiredCookie();
+                String domain = uri.getHost();
+                String cookieStr = mgr.getCookie(url);
+                if (cookieStr != null) {
+                    String[] cookies = cookieStr.split(";");
+                    int len = cookies.length;
+                    Vector out = new Vector();
+                    for (int i = 0; i < len; i++) {
+                        Cookie c = new Cookie();
+                        String[] parts = cookies[i].split("=");
+                        c.setName(parts[0].trim());
+                        if (parts.length > 1) {
+                            c.setValue(parts[1].trim());
+                        } else {
+                            c.setValue("");
+                        }
+                        c.setDomain(domain);
+                        out.add(c);
+                    }
+                    return out;
+                }
+            } catch (Exception ex) {
+                com.codename1.io.Log.e(ex);
+            }
+            return new Vector();
+        }
+        return super.getCookiesForURL(url);
+    }
     
     class AndroidBrowserComponent extends AndroidImplementation.AndroidPeer {
 
@@ -4014,16 +4086,18 @@ public class AndroidImplementation extends CodenameOneImplementation implements 
 
             web.setWebViewClient(new WebViewClient() {
                 public void onLoadResource(WebView view, String url) {
-                    if (Display.getInstance().getProperty("syncNativeCookies", "true").equals("true")) {
+                    if (Display.getInstance().getProperty("syncNativeCookies", "false").equals("true")) {
                         try {
                             URI uri = new URI(url);
-                            CookieManager mgr = CookieManager.getInstance();
+                            CookieManager mgr = getCookieManager();
+                            mgr.removeExpiredCookie();
+                            String domain = uri.getHost();
+                            removeCookiesForDomain(domain);
                             String cookieStr = mgr.getCookie(url);
                             if (cookieStr != null) {
                                 String[] cookies = cookieStr.split(";");
                                 int len = cookies.length;
-                                Vector out = new Vector();
-                                String domain = uri.getHost();
+                                ArrayList out = new ArrayList();
                                 for (int i = 0; i < len; i++) {
                                     Cookie c = new Cookie();
                                     String[] parts = cookies[i].split("=");
@@ -4118,7 +4192,7 @@ public class AndroidImplementation extends CodenameOneImplementation implements 
                     
                     // this will fail if dial permission isn't declared
                     if(url.startsWith("tel:")) {
-                        if(parent.getBrowserNavigationCallback().shouldNavigate(url)) {
+                        if(parent.fireBrowserNavigationCallbacks(url)) {
                             try {
                                 Intent dialer = new Intent(android.content.Intent.ACTION_DIAL, Uri.parse(url));
                                 getContext().startActivity(dialer);
@@ -4128,7 +4202,7 @@ public class AndroidImplementation extends CodenameOneImplementation implements 
                     }
                     // this will fail if dial permission isn't declared
                     if(url.startsWith("mailto:")) {
-                        if(parent.getBrowserNavigationCallback().shouldNavigate(url)) {
+                        if(parent.fireBrowserNavigationCallbacks(url)) {
                             try {
                                 Intent emailIntent = new Intent(Intent.ACTION_SENDTO, Uri.parse(url));        
                                 getContext().startActivity(emailIntent);
@@ -4136,7 +4210,7 @@ public class AndroidImplementation extends CodenameOneImplementation implements 
                         }
                         return true;
                     }
-                    return !parent.getBrowserNavigationCallback().shouldNavigate(url); 
+                    return !parent.fireBrowserNavigationCallbacks(url); 
                 }
                 
                 
@@ -5635,6 +5709,32 @@ public class AndroidImplementation extends CodenameOneImplementation implements 
 
         }
         
+        private void setNativeController(final boolean nativeController) {
+            if (nativeController != this.nativeController) {
+                this.nativeController = nativeController;
+                if (nativeVideo != null) {
+                    Activity activity = getActivity();
+                    if (activity != null) {
+                        activity.runOnUiThread(new Runnable() {
+
+                            @Override
+                            public void run() {
+                                if (nativeVideo != null) {
+                                    MediaController mc = new AndroidImplementation.CN1MediaController();
+                                    nativeVideo.setMediaController(mc);
+                                    if (!nativeController) mc.setVisibility(View.GONE);
+                                    else mc.setVisibility(View.VISIBLE);
+                                    
+                                }
+                            }
+
+                        });
+                    }
+
+                }
+            }
+        }
+        
         @Override
         public void init() {
             super.init();
@@ -5646,7 +5746,8 @@ public class AndroidImplementation extends CodenameOneImplementation implements 
 
         @Override
         public void play() {
-            if (nativePlayer && curentForm == null) {
+            Component cmp = getVideoComponent();
+            if (cmp.getParent() == null && nativePlayer && curentForm == null) {
                 curentForm = Display.getInstance().getCurrent();
                 Form f = new Form();
                 f.setBackCommand(new Command("") {
@@ -5662,7 +5763,7 @@ public class AndroidImplementation extends CodenameOneImplementation implements 
                     }
                 });
                 f.setLayout(new BorderLayout());
-                Component cmp = getVideoComponent();
+                
                 if(cmp.getParent() != null) {
                     cmp.getParent().removeComponent(cmp);
                 }
@@ -5858,6 +5959,9 @@ public class AndroidImplementation extends CodenameOneImplementation implements 
         }
 
         public void setVariable(String key, Object value) {
+            if (nativeVideo != null && Media.VARIABLE_NATIVE_CONTRLOLS_EMBEDDED.equals(key) && value instanceof Boolean) {
+                setNativeController((Boolean)value);
+            }
         }
 
         public Object getVariable(String key) {
@@ -6711,16 +6815,20 @@ public class AndroidImplementation extends CodenameOneImplementation implements 
             CookieSyncManager syncer;
             try {
                 syncer = CookieSyncManager.getInstance();
-                mgr = CookieManager.getInstance();
+                mgr = getCookieManager();
             } catch(IllegalStateException ex) {
                 syncer = CookieSyncManager.createInstance(this.getContext());
-                mgr = CookieManager.getInstance();
+                mgr = getCookieManager();
             }
+            java.text.SimpleDateFormat format = new java.text.SimpleDateFormat("EEE, dd-MMM-yyyy HH:mm:ss z");
+            format.setTimeZone(TimeZone.getTimeZone("GMT"));
             String cookieString = c.getName()+"="+c.getValue()+
                     "; Domain="+c.getDomain()+
                     "; Path="+c.getPath()+
                     "; "+(c.isSecure()?"Secure;":"")
-                    +(c.isHttpOnly()?"httpOnly;":"");
+                    +(c.isHttpOnly()?"httpOnly;":"")
+                    + (c.getExpires() != 0 ? ("Expires="+format.format(new Date(c.getExpires()))+";") : "")
+                    ;
             mgr.setCookie("http"+
                     (c.isSecure()?"s":"")+"://"+
                     c.getDomain()+
@@ -6741,22 +6849,28 @@ public class AndroidImplementation extends CodenameOneImplementation implements 
             CookieSyncManager syncer;
             try {
                 syncer = CookieSyncManager.getInstance();
-                mgr = CookieManager.getInstance();
+                mgr = getCookieManager();
             } catch(IllegalStateException ex) {
                 syncer = CookieSyncManager.createInstance(this.getContext());
-                mgr = CookieManager.getInstance();
+                mgr = getCookieManager();
             }
+            java.text.SimpleDateFormat format = new java.text.SimpleDateFormat("EEE, dd-MMM-yyyy HH:mm:ss z");
+            format.setTimeZone(TimeZone.getTimeZone("GMT"));
+
             for (Cookie c : cs) {
                 String cookieString = c.getName() + "=" + c.getValue() +
                         "; Domain=" + c.getDomain() +
                         "; Path=" + c.getPath() +
                         "; " + (c.isSecure() ? "Secure;" : "")
+                        + (c.getExpires() != 0 ? (" Expires="+format.format(new Date(c.getExpires()))+";") : "")
                         + (c.isHttpOnly() ? "httpOnly;" : "");
                 mgr.setCookie("http" +
                         (c.isSecure() ? "s" : "") + "://" +
                         c.getDomain() +
                         c.getPath(), cookieString);
+                
             }
+
             if(sync) {
                 syncer.sync();
             }

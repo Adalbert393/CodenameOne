@@ -1346,6 +1346,15 @@ public class JavaSEPort extends CodenameOneImplementation {
         Integer triggeredKeyCode;
 
         public void mousePressed(MouseEvent e) {
+            Form f = Display.getInstance().getCurrent();
+            if (f != null) {
+                int x = scaleCoordinateX(e.getX());
+                int y = scaleCoordinateY(e.getY());
+                Component cmp = f.getComponentAt(x, y);
+                if (!(cmp instanceof PeerComponent)) {
+                    cn1GrabbedDrag = true;
+                }
+            }
             e.consume();
             if (!isEnabled()) {
                 return;
@@ -1400,6 +1409,7 @@ public class JavaSEPort extends CodenameOneImplementation {
         }
 
         public void mouseReleased(MouseEvent e) {
+            cn1GrabbedDrag = false;
             e.consume();
             if (!isEnabled()) {
                 return;
@@ -1687,7 +1697,7 @@ public class JavaSEPort extends CodenameOneImplementation {
         boolean ignoreWheelMovements = false;
         int lastX;
         int lastY;
-        public void mouseWheelMoved(MouseWheelEvent e) {
+        public void mouseWheelMoved(final MouseWheelEvent e) {
             e.consume();
             if (!isEnabled()) {
                 return;
@@ -1701,7 +1711,7 @@ public class JavaSEPort extends CodenameOneImplementation {
                     // NOTE:  This is off edt... I've noticed an NPE
                     // inset getComponentAt() because of this
                     // we should move to EDT
-                    Component cmp = f.getContentPane().getComponentAt(x, y);
+                    Component cmp = f.getResponderAt(x, y);
                     if(cmp != null && Accessor.isScrollDecelerationMotionInProgress(cmp)) {
                         if (!ignoreWheelMovements) {
                             ignoreWheelMovements = true;
@@ -1727,7 +1737,7 @@ public class JavaSEPort extends CodenameOneImplementation {
                         scrollWheeling = true;
                         Form f = getCurrentForm();
                         if(f != null){
-                            Component cmp = f.getContentPane().getComponentAt(x, y);
+                            Component cmp = f.getResponderAt(x, y);
                             if(cmp != null && cmp.isFocusable()) {
                                 cmp.setFocusable(false);
                                 f.pointerPressed(x, y);
@@ -1745,7 +1755,7 @@ public class JavaSEPort extends CodenameOneImplementation {
                     public void run() {
                         Form f = getCurrentForm();
                         if(f != null){
-                            Component cmp = f.getContentPane().getComponentAt(x, y);
+                            Component cmp = f.getResponderAt(x, y);
                             if (cmp != null && Accessor.isScrollDecelerationMotionInProgress(cmp)) {
                                 return;
                             }
@@ -1763,7 +1773,7 @@ public class JavaSEPort extends CodenameOneImplementation {
                     public void run() {
                         Form f = getCurrentForm();
                         if(f != null){
-                            Component cmp = f.getContentPane().getComponentAt(x, y);
+                            Component cmp = f.getResponderAt(x, y);
                             if (cmp != null && Accessor.isScrollDecelerationMotionInProgress(cmp)) {
                                 return;
                             }
@@ -1781,7 +1791,7 @@ public class JavaSEPort extends CodenameOneImplementation {
                     public void run() {
                         Form f = getCurrentForm();
                         if(f != null){
-                            Component cmp = f.getContentPane().getComponentAt(x, y);
+                            Component cmp = f.getResponderAt(x, y);
                             if (cmp != null && Accessor.isScrollDecelerationMotionInProgress(cmp)) {
                                 f.pointerReleased(x, y + units);
                                 return;
@@ -1803,6 +1813,7 @@ public class JavaSEPort extends CodenameOneImplementation {
         }
         
     }
+    boolean cn1GrabbedDrag=false;
     C canvas;
 
     protected java.awt.Container getCanvas() {
@@ -4611,6 +4622,10 @@ public class JavaSEPort extends CodenameOneImplementation {
     }
 
     private void scaleArray(BufferedImage currentImage, int srcWidth, int srcHeight, int height, int width, int[] currentArray, int[] destinationArray) {
+        // disable EDT logging for this method
+        boolean edtLog = showEDTWarnings;
+        showEDTWarnings = false;
+        
         // Horizontal Resize
         int yRatio = (srcHeight << 16) / height;
         int xRatio = (srcWidth << 16) / width;
@@ -4633,6 +4648,7 @@ public class JavaSEPort extends CodenameOneImplementation {
             yPos += yRatio;
             xPos = xRatio / 2;
         }
+        showEDTWarnings = edtLog;
     }
 
     private static int round(double d) {
@@ -6408,18 +6424,17 @@ public class JavaSEPort extends CodenameOneImplementation {
 
         
         
-        
-        
+        private boolean peerGrabbedDrag=false;
         
         private boolean sendToCn1(MouseEvent e) {
             
             int cn1X = getCN1X(e);
             int cn1Y = getCN1Y(e);
-            if (Display.isInitialized()) {
+            if ((!peerGrabbedDrag || true) && Display.isInitialized()) {
                 Form f = Display.getInstance().getCurrent();
                 if (f != null) {
                     Component cmp = f.getComponentAt(cn1X, cn1Y);
-                    if (cmp != null && !(cmp instanceof PeerComponent)) {
+                    //if (!(cmp instanceof PeerComponent) || cn1GrabbedDrag) {
                         // It's not a peer component, so we should pass the event to the canvas
                         e = SwingUtilities.convertMouseEvent(this, e, canvas);
                         switch (e.getID()) {
@@ -6433,9 +6448,14 @@ public class JavaSEPort extends CodenameOneImplementation {
                                 canvas.mouseMoved(e);
                                 break;
                             case MouseEvent.MOUSE_PRESSED:
+                                // Mouse pressed in native component - passed to lightweight cmp
+                                if (!(cmp instanceof PeerComponent)) {
+                                    cn1GrabbedDrag = true;
+                                }
                                 canvas.mousePressed(e);
                                 break;
                             case MouseEvent.MOUSE_RELEASED:
+                                cn1GrabbedDrag = false;
                                 canvas.mouseReleased(e);
                                 break;
                             case MouseEvent.MOUSE_WHEEL:
@@ -6443,12 +6463,22 @@ public class JavaSEPort extends CodenameOneImplementation {
                                 break;
                                 
                         }
+                        //return true;
+                        if (cn1GrabbedDrag) {
+                            return true;
+                        }
+                        if (cmp instanceof PeerComponent) {
+                            return false;
+                        }
                         return true;
-                        
-                        
-                        //canvas.dispatchEvent(SwingUtilities.convertMouseEvent(this, e, canvas));
-                    }
+                    //}
                 }
+            }
+            if (e.getID() == MouseEvent.MOUSE_RELEASED) {
+                cn1GrabbedDrag = false;
+                peerGrabbedDrag = false;
+            } else if (e.getID() == MouseEvent.MOUSE_PRESSED) {
+                peerGrabbedDrag = true;
             }
             return false;
         }
@@ -8744,7 +8774,7 @@ public class JavaSEPort extends CodenameOneImplementation {
     }
 
     public void setBrowserURL(final PeerComponent browserPeer, String url) {
-        if(url.startsWith("file:") && url.indexOf("/html/") < 0) {
+        if(url.startsWith("file:") && (url.indexOf("/html/") < 0 || !exposeFilesystem)) {
             url = "file://" + unfile(url);
         }
         if (url.startsWith("jar:")) {
@@ -10064,7 +10094,7 @@ public class JavaSEPort extends CodenameOneImplementation {
     public void setProjectBuildHint(String key, String value) {
          File cnopFile = new File("codenameone_settings.properties");
         if(cnopFile.exists()) {
-            java.util.Properties cnop = new java.util.Properties();
+            Properties cnop = new Properties();
             try(InputStream is = new FileInputStream(cnopFile)) {
                 cnop.load(is);
             } catch(IOException err) {
