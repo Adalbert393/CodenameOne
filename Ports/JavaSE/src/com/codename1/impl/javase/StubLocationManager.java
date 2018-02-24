@@ -299,8 +299,12 @@ class StubLocationManager extends LocationManager {
 
     @Override
     protected void clearListener() {
-        task.cancel();
-        timer.cancel();
+				if(task!=null){
+					task.cancel();
+				}
+				if(timer!=null){
+					timer.cancel();
+				}
         timer = null;
         task = null;
     }
