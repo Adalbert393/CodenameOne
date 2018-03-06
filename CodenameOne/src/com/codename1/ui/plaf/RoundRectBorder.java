@@ -41,7 +41,7 @@ import com.codename1.ui.geom.Rectangle;
  * @author Shai Almog
  */
 public class RoundRectBorder extends Border {
-    private static final String CACHE_KEY = "cn1$$-rbcache";
+    private static final String CACHE_KEY = "cn1$$-rrbcache";
         
     /**
      * The color of the edge of the border if applicable
@@ -318,11 +318,30 @@ public class RoundRectBorder extends Border {
             }
         }
         tg.translate(shapeX, shapeY);
-        c.getStyle().setBorder(Border.createEmpty());
 
         GeneralPath gp = createShape(shapeW, shapeH);
+        Style s = c.getStyle();
+        if(s.getBgImage() == null ) {
+            byte type = s.getBackgroundType();
+            if(type == Style.BACKGROUND_IMAGE_SCALED || type == Style.BACKGROUND_NONE) {
+                byte bgt = c.getStyle().getBgTransparency();
+                if(bgt != 0) {
+                    tg.setAlpha(bgt &0xff);
+                    tg.setColor(s.getBgColor());
+                    tg.fillShape(gp);
+                }
+                if(this.stroke != null && strokeOpacity > 0 && strokeThickness > 0) {
+                    tg.setAlpha(strokeOpacity);
+                    tg.setColor(strokeColor);
+                    tg.drawShape(gp, this.stroke);
+                }            
+                return target;
+            }
+        }
+        
+        c.getStyle().setBorder(Border.createEmpty());
         tg.setClip(gp);
-        c.getStyle().getBgPainter().paint(tg, new Rectangle(0, 0, w, h));
+        s.getBgPainter().paint(tg, new Rectangle(0, 0, w, h));
         if(this.stroke != null && strokeOpacity > 0 && strokeThickness > 0) {
             tg.setClip(0, 0, w, h);
             tg.setAlpha(strokeOpacity);
@@ -389,15 +408,36 @@ public class RoundRectBorder extends Border {
             }
         }            
         
-        gp.moveTo(x + radius, y);
-        gp.lineTo(x + widthF - radius, y);
-        gp.quadTo(x + widthF, y, x + widthF, y + radius);
-        gp.lineTo(x + widthF, y + heightF - radius);
-        gp.quadTo(x + widthF, y + heightF, x + widthF - radius, y + heightF);
-        gp.lineTo(x + radius, y + heightF);
-        gp.quadTo(x, y + heightF, x, y + heightF - radius);
-        gp.lineTo(x, y + radius);
-        gp.quadTo(x, y, x + radius, y);
+        if(topOnlyMode) {
+            gp.moveTo(x, y);
+            gp.lineTo(x + widthF, y);
+            gp.lineTo(x + widthF, y + heightF - radius);
+            gp.quadTo(x + widthF, y + heightF, x + widthF - radius, y + heightF);
+            gp.lineTo(x + radius, y + heightF);
+            gp.quadTo(x, y + heightF, x, y + heightF - radius);
+            gp.lineTo(x, y);
+            gp.quadTo(x, y, x + radius, y);
+        } else {
+            if(bottomOnlyMode) {
+                gp.moveTo(x + radius, y);
+                gp.lineTo(x + widthF - radius, y);
+                gp.quadTo(x + widthF, y, x + widthF, y + radius);
+                gp.lineTo(x + widthF, y + heightF);
+                gp.lineTo(x, y + heightF);
+                gp.lineTo(x, y + radius);
+                gp.quadTo(x, y, x + radius, y);
+            } else {
+                gp.moveTo(x + radius, y);
+                gp.lineTo(x + widthF - radius, y);
+                gp.quadTo(x + widthF, y, x + widthF, y + radius);
+                gp.lineTo(x + widthF, y + heightF - radius);
+                gp.quadTo(x + widthF, y + heightF, x + widthF - radius, y + heightF);
+                gp.lineTo(x + radius, y + heightF);
+                gp.quadTo(x, y + heightF, x, y + heightF - radius);
+                gp.lineTo(x, y + radius);
+                gp.quadTo(x, y, x + radius, y);
+            }
+        }
         gp.closePath();            
         return gp;
     }

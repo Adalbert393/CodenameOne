@@ -429,6 +429,7 @@ public class JavaSEPort extends CodenameOneImplementation {
     private boolean portrait = true;
     private BufferedImage portraitSkin;
     private BufferedImage landscapeSkin;
+    private boolean roundedSkin;
     private Map<java.awt.Point, Integer> portraitSkinHotspots;
     private java.awt.Rectangle portraitScreenCoordinates;
     private Map<java.awt.Point, Integer> landscapeSkinHotspots;
@@ -441,6 +442,7 @@ public class JavaSEPort extends CodenameOneImplementation {
     private static NetworkMonitor netMonitor;
     private static PerformanceMonitor perfMonitor;
     static LocationSimulation locSimulation;
+    static PushSimulator pushSimulation;
     private static boolean blockMonitors;
     private static boolean fxExists = false;
     private JFrame window;
@@ -1092,15 +1094,23 @@ public class JavaSEPort extends CodenameOneImplementation {
                     if(zoomLevel != 1) {
                         AffineTransform af = bg.getTransform();
                         bg.setTransform(AffineTransform.getScaleInstance(1, 1));
-                        bg.translate(-(getScreenCoordinates().x + x )* zoomLevel, -(getScreenCoordinates().y + y ) * zoomLevel);
+                        bg.translate(-(screenCoord.x + x )* zoomLevel, -(screenCoord.y + y ) * zoomLevel);
                         super.paintChildren(bg);
                         bg.setTransform(af);
                     } else {
-                        bg.translate(-getScreenCoordinates().x - x, -getScreenCoordinates().y - y);
+                        bg.translate(-screenCoord.x - x, -screenCoord.y - y);
                         super.paintChildren(bg);
-                    }
+                    }                    
                     bg.dispose();
                     painted = true;
+                }
+                
+                if(roundedSkin) {
+                    Graphics2D bg = buffer.createGraphics();
+                    BufferedImage skin = getSkin();
+                    bg.drawImage(skin, -(int) ((getScreenCoordinates().getX() + x) * zoomLevel), -(int) ((getScreenCoordinates().getY() + y) * zoomLevel), 
+                            (int)(skin.getWidth() * zoomLevel), (int)(skin.getHeight() * zoomLevel), null);
+                    bg.dispose();
                 }
                 
                 if (isEnabled()) {
@@ -1708,10 +1718,14 @@ public class JavaSEPort extends CodenameOneImplementation {
             if (e.getScrollType() == MouseWheelEvent.WHEEL_UNIT_SCROLL) {
                 Form f = getCurrentForm();
                 if(f != null){
-                    // NOTE:  This is off edt... I've noticed an NPE
-                    // inset getComponentAt() because of this
-                    // we should move to EDT
-                    Component cmp = f.getResponderAt(x, y);
+                    Component cmp;
+                    try {
+                        cmp = f.getResponderAt(x, y);
+                    } catch (Throwable t) {
+                        // Since this is called off the edt, we sometimes hit 
+                        // NPEs and Array Index out of bounds errors here
+                        cmp = null;
+                    }
                     if(cmp != null && Accessor.isScrollDecelerationMotionInProgress(cmp)) {
                         if (!ignoreWheelMovements) {
                             ignoreWheelMovements = true;
@@ -2006,25 +2020,44 @@ public class JavaSEPort extends CodenameOneImplementation {
             }
             z.close();
 
-            String pix = props.getProperty("pixelRatio");
-            if (pix != null && pix.length() > 0) {
-                try {
-                    pixelMilliRatio = Double.valueOf(pix);
-                } catch (NumberFormatException err) {
-                    err.printStackTrace();
+            String ppi = props.getProperty("ppi");
+            if(ppi != null) {
+                double ppiD = Double.valueOf(ppi);
+                pixelMilliRatio = ppiD / 25.4;
+            } else {
+                String pix = props.getProperty("pixelRatio");
+                if (pix != null && pix.length() > 0) {
+                    try {
+                        pixelMilliRatio = Double.valueOf(pix);
+                    } catch (NumberFormatException err) {
+                        err.printStackTrace();
+                        pixelMilliRatio = null;
+                    }
+                } else {
                     pixelMilliRatio = null;
                 }
-            } else {
-                pixelMilliRatio = null;
             }
 
             portraitSkinHotspots = new HashMap<Point, Integer>();
             portraitScreenCoordinates = new Rectangle();
-            initializeCoordinates(map, props, portraitSkinHotspots, portraitScreenCoordinates);
 
             landscapeSkinHotspots = new HashMap<Point, Integer>();
             landscapeScreenCoordinates = new Rectangle();
-            initializeCoordinates(landscapeMap, props, landscapeSkinHotspots, landscapeScreenCoordinates);
+
+            if(props.getProperty("roundScreen", "false").equalsIgnoreCase("true")) {
+                portraitScreenCoordinates.x = Integer.parseInt(props.getProperty("displayX"));
+                portraitScreenCoordinates.y = Integer.parseInt(props.getProperty("displayY"));
+                portraitScreenCoordinates.width = Integer.parseInt(props.getProperty("displayWidth"));
+                portraitScreenCoordinates.height = Integer.parseInt(props.getProperty("displayHeight"));
+                landscapeScreenCoordinates.x = portraitScreenCoordinates.y;
+                landscapeScreenCoordinates.y = portraitScreenCoordinates.x;
+                landscapeScreenCoordinates.width = portraitScreenCoordinates.height;
+                landscapeScreenCoordinates.height = portraitScreenCoordinates.width;
+                roundedSkin = true;
+            } else {
+                initializeCoordinates(map, props, portraitSkinHotspots, portraitScreenCoordinates);
+                initializeCoordinates(landscapeMap, props, landscapeSkinHotspots, landscapeScreenCoordinates);
+            }
 
             platformName = props.getProperty("platformName", "se");
             platformOverrides = props.getProperty("overrideNames", "").split(",");
@@ -2054,10 +2087,19 @@ public class JavaSEPort extends CodenameOneImplementation {
             setFontFaces(props.getProperty("systemFontFamily", "Arial"),
                     props.getProperty("proportionalFontFamily", "SansSerif"),
                     props.getProperty("monospaceFontFamily", "Monospaced"));
-            float factor = ((float) getDisplayHeightImpl()) / 480.0f;
-            int med = (int) (15.0f * factor);
-            int sm = (int) (11.0f * factor);
-            int la = (int) (19.0f * factor);
+            int med;
+            int sm;
+            int la;
+            if(pixelMilliRatio == null) {
+                float factor = ((float) getDisplayHeightImpl()) / 480.0f;
+                med = (int) (15.0f * factor);
+                sm = (int) (11.0f * factor);
+                la = (int) (19.0f * factor);
+            } else {
+                med = (int) Math.round(2.6 * pixelMilliRatio.doubleValue());
+                sm = (int) Math.round(2 * pixelMilliRatio.doubleValue());
+                la = (int) Math.round(3.3 * pixelMilliRatio.doubleValue());
+            }
             setFontSize(Integer.parseInt(props.getProperty("mediumFontSize", "" + med)),
                     Integer.parseInt(props.getProperty("smallFontSize", "" + sm)),
                     Integer.parseInt(props.getProperty("largeFontSize", "" + la)));
@@ -2215,17 +2257,6 @@ public class JavaSEPort extends CodenameOneImplementation {
             KeyStroke f2 = KeyStroke.getKeyStroke(KeyEvent.VK_F2, 0);
             screenshot.setAccelerator(f2);
             screenshot.addActionListener(new ActionListener() {
-
-                private File findScreenshotFile() {
-                    int counter = 1;
-                    File f = new File(System.getProperty("user.home"), "CodenameOne Screenshot " + counter + ".png");
-                    while (f.exists()) {
-                        counter++;
-                        f = new File(System.getProperty("user.home"), "CodenameOne Screenshot " + counter + ".png");
-                    }
-                    return f;
-                }
-
                 @Override
                 public void actionPerformed(ActionEvent ae) {
                     final float zoom = zoomLevel;
@@ -2295,6 +2326,83 @@ public class JavaSEPort extends CodenameOneImplementation {
                 }
             });
 
+            JMenuItem screenshotWithSkin = new JMenuItem("Screenshot With Skin");
+            simulatorMenu.add(screenshotWithSkin);
+            screenshotWithSkin.addActionListener(new ActionListener() {
+                @Override
+                public void actionPerformed(ActionEvent e) {
+                    final float zoom = zoomLevel;
+                    zoomLevel = 1;
+                    
+                    final Form frm = Display.getInstance().getCurrent();
+                    BufferedImage headerImageTmp;
+                    if (isPortrait()) {
+                        headerImageTmp = header;
+                    } else {
+                        headerImageTmp = headerLandscape;
+                    }
+                    if (!includeHeaderInScreenshot) {
+                        headerImageTmp = null;
+                    }
+                    int headerHeightTmp = 0;
+                    if (headerImageTmp != null) {
+                        headerHeightTmp = headerImageTmp.getHeight();
+                    }
+                    final int headerHeight = headerHeightTmp;
+                    final BufferedImage headerImage = headerImageTmp;
+                    //gr.translate(0, statusBarHeight);
+                    Display.getInstance().callSerially(new Runnable() {
+                        public void run() {
+                            final com.codename1.ui.Image img = com.codename1.ui.Image.createImage(frm.getWidth(), frm.getHeight());
+                            com.codename1.ui.Graphics gr = img.getGraphics();
+                            takingScreenshot = true;
+                            screenshotActualZoomLevel = zoom;
+                            try {
+                                frm.paint(gr);
+                            } finally {
+                                takingScreenshot = false;
+                            }
+                            final int imageWidth = img.getWidth();
+                            final int imageHeight = img.getHeight();
+                            final int[] imageRGB = img.getRGB();
+                            SwingUtilities.invokeLater(new Runnable() {
+                                public void run() {
+                                    BufferedImage bi = new BufferedImage(frm.getWidth(), frm.getHeight() + headerHeight, BufferedImage.TYPE_INT_ARGB);
+                                    bi.setRGB(0, headerHeight, imageWidth, imageHeight, imageRGB, 0, imageWidth);
+                                    BufferedImage skin = getSkin();
+                                    BufferedImage newSkin = new BufferedImage(skin.getWidth(), skin.getHeight(), BufferedImage.TYPE_INT_ARGB);
+                                    Graphics2D g2d = newSkin.createGraphics();
+                                    g2d.drawImage(bi, getScreenCoordinates().x, getScreenCoordinates().y, null);
+                                    if (headerImage != null) {
+                                        g2d.drawImage(headerImage, getScreenCoordinates().x, getScreenCoordinates().y, null);
+                                    }                        
+                                    g2d.drawImage(skin, 0, 0, null);
+                                    g2d.dispose();
+                                    OutputStream out = null;
+                                    try {
+                                        out = new FileOutputStream(findScreenshotFile());
+                                        ImageIO.write(newSkin, "png", out);
+                                        out.close();
+                                    } catch (Throwable ex) {
+                                        ex.printStackTrace();
+                                        System.exit(1);
+                                    } finally {
+                                        zoomLevel = zoom;
+                                        try {
+                                            out.close();
+                                        } catch (Throwable ex) {
+                                        }
+                                        frm.repaint();
+                                        canvas.repaint();
+                                    }
+                                }
+                            });
+                        }
+                    });
+                }
+            });
+            
+            
             includeHeaderInScreenshot = pref.getBoolean("includeHeaderScreenshot", true);
             final JCheckBoxMenuItem includeHeaderMenu = new JCheckBoxMenuItem("Screenshot StatusBar");
             includeHeaderMenu.setToolTipText("Include status bar area in Screenshots");
@@ -2570,6 +2678,19 @@ public class JavaSEPort extends CodenameOneImplementation {
             });
             simulatorMenu.add(locactionSim);
             
+            JMenuItem pushSim = new JMenuItem("Push Simulation");
+            pushSim.addActionListener(new ActionListener() {
+                @Override
+                public void actionPerformed(ActionEvent ae) {
+                    if(pushSimulation == null) {
+                            pushSimulation = new PushSimulator();
+                    }
+                    pref.putBoolean("PushSimulator", true);
+                    pushSimulation.setVisible(true);
+                }
+            });
+            simulatorMenu.add(pushSim);
+
             simulatorMenu.add(componentTreeInspector);
             
 
@@ -2984,6 +3105,17 @@ public class JavaSEPort extends CodenameOneImplementation {
                 }
             });
     }
+    
+    File findScreenshotFile() {
+        int counter = 1;
+        File f = new File(System.getProperty("user.home"), "CodenameOne Screenshot " + counter + ".png");
+        while (f.exists()) {
+            counter++;
+            f = new File(System.getProperty("user.home"), "CodenameOne Screenshot " + counter + ".png");
+        }
+        return f;
+    }
+
 
     private JMenu createSkinsMenu(final JFrame frm, final JMenu menu) throws MalformedURLException {
         JMenu m;
@@ -3535,10 +3667,20 @@ public class JavaSEPort extends CodenameOneImplementation {
      */
     public void init(Object m) {
         inInit = true;
-        
+
+        File updater = new File(System.getProperty("user.home") + File.separator + ".codenameone" + File.separator + "UpdateCodenameOne.jar");
+        if(!updater.exists()) {
+            System.out.println("******************************************************************************");
+            System.out.println("* It seems that you are using an old plugin version please upate to the latest plugin and invoke Codename One -> Codename One Settings -> Basic -> Update Client Libs");
+            System.out.println("******************************************************************************");
+        }
+                
         Preferences pref = Preferences.userNodeForPackage(JavaSEPort.class);
         boolean desktopSkin = pref.getBoolean("desktopSkin", false);
         if (desktopSkin && m == null) {
+            Toolkit tk = Toolkit.getDefaultToolkit();
+            setDefaultPixelMilliRatio(tk.getScreenResolution() / 25.4 * getRetinaScale());
+            pixelMilliRatio = getDefaultPixelMilliRatio();
             JPanel panel = new javax.swing.JPanel();  
             panel.setLayout(new BorderLayout());
             JPanel bottom = new javax.swing.JPanel(); 
@@ -3591,6 +3733,10 @@ public class JavaSEPort extends CodenameOneImplementation {
         HttpURLConnection.setFollowRedirects(false);
         if (!blockMonitors && pref.getBoolean("NetworkMonitor", false)) {
             showNetworkMonitor();
+        }
+        if (!blockMonitors && pref.getBoolean("PushSimulator", false)) {
+            pushSimulation = new PushSimulator();
+            pushSimulation.setVisible(true);
         }
         if (!blockMonitors && pref.getBoolean("PerformanceMonitor", false)) {
             showPerformanceMonitor();
@@ -6485,24 +6631,80 @@ public class JavaSEPort extends CodenameOneImplementation {
         
         private int getCN1X(MouseEvent e) {
             if (canvas == null) {
-                return e.getXOnScreen();
+                int out = e.getXOnScreen();
+                if (out == 0) {
+                    // For some reason the web browser would return 0 for screen coordinates
+                    // but would still have correct values for getX() and getY() when 
+                    // dealing with mouse wheel events.  In these cases we need to 
+                    // get the screen coordinate from the component
+                    // and add it to the relative coordinate.
+                    out = e.getX(); // In some cases absX is set to zero for mouse wheel events
+                    Object source = e.getSource();
+                    if (source instanceof java.awt.Component) {
+                        Point pt = ((java.awt.Component)source).getLocationOnScreen();
+                        out  += pt.x;
+                    }
+                }
+                return out;
             }
             java.awt.Rectangle screenCoords = getScreenCoordinates();
             if (screenCoords == null) {
                 screenCoords = new java.awt.Rectangle(0, 0, 0, 0);
             }
-            return (int)((e.getXOnScreen() - canvas.getLocationOnScreen().x - (canvas.x + screenCoords.x) * zoomLevel / retinaScale) / zoomLevel * retinaScale);
+            int x = e.getXOnScreen();
+            if (x == 0) {
+                // For some reason the web browser would return 0 for screen coordinates
+                // but would still have correct values for getX() and getY() when 
+                // dealing with mouse wheel events.  In these cases we need to 
+                // get the screen coordinate from the component
+                // and add it to the relative coordinate.
+                x = e.getX();
+                Object source = e.getSource();
+                if (source instanceof java.awt.Component) {
+                    Point pt = ((java.awt.Component)source).getLocationOnScreen();
+                    x += pt.x;
+                }
+            }
+            return (int)((x - canvas.getLocationOnScreen().x - (canvas.x + screenCoords.x) * zoomLevel / retinaScale) / zoomLevel * retinaScale);
         }
 
         private int getCN1Y(MouseEvent e) {
             if (canvas == null) {
-                return e.getYOnScreen();
+                int out = e.getYOnScreen();
+                if (out == 0) {
+                    // For some reason the web browser would return 0 for screen coordinates
+                    // but would still have correct values for getX() and getY() when 
+                    // dealing with mouse wheel events.  In these cases we need to 
+                    // get the screen coordinate from the component
+                    // and add it to the relative coordinate.
+                    out = e.getY();
+                    Object source = e.getSource();
+                    if (source instanceof java.awt.Component) {
+                        Point pt = ((java.awt.Component)source).getLocationOnScreen();
+                        out  += pt.y;
+                    }
+                }
+                return out;
             }
             java.awt.Rectangle screenCoords = getScreenCoordinates();
             if (screenCoords == null) {
                 screenCoords = new java.awt.Rectangle(0, 0, 0, 0);
             }
-            return (int)((e.getYOnScreen() - canvas.getLocationOnScreen().y - (canvas.y + screenCoords.y) * zoomLevel / retinaScale) / zoomLevel * retinaScale);
+            int y = e.getYOnScreen();
+            if (y == 0) {
+                // For some reason the web browser would return 0 for screen coordinates
+                // but would still have correct values for getX() and getY() when 
+                // dealing with mouse wheel events.  In these cases we need to 
+                // get the screen coordinate from the component
+                // and add it to the relative coordinate.
+                y = e.getY();
+                Object source = e.getSource();
+                if (source instanceof java.awt.Component) {
+                    Point pt = ((java.awt.Component)source).getLocationOnScreen();
+                    y += pt.y;
+                }
+            }
+            return (int)((y - canvas.getLocationOnScreen().y - (canvas.y + screenCoords.y) * zoomLevel / retinaScale) / zoomLevel * retinaScale);
         }
         
         public CN1JFXPanel() {
@@ -6924,7 +7126,7 @@ public class JavaSEPort extends CodenameOneImplementation {
                     }
                 }
             }
-            if(warnAboutHttp) {
+            if(warnAboutHttp && url.indexOf("localhost") < 0 && url.indexOf("127.0.0") < 0) {
                 System.out.println("WARNING: Apple will no longer accept http URL connections from applications you tried to connect to " + 
                         url +" to learn more check out https://www.codenameone.com/blog/ios-http-urls.html" );
             }
@@ -7485,9 +7687,6 @@ public class JavaSEPort extends CodenameOneImplementation {
      * @inheritDoc
      */
     public char getFileSystemSeparator() {
-        if(exposeFilesystem) {
-            return File.separatorChar;
-        }
         return '/';
     }
 
@@ -7850,15 +8049,22 @@ public class JavaSEPort extends CodenameOneImplementation {
         if(!checkForPermission("android.permission.WRITE_EXTERNAL_STORAGE", "This is required to browse the photos")){
             return;
         }
+        
         if(type == Display.GALLERY_VIDEO){
+            checkAppleMusicUsageDescription();
             capture(response, videoExtensions, getGlobsForExtensions(videoExtensions, ";"));
         }else if(type == Display.GALLERY_IMAGE){
+            checkPhotoLibraryUsageDescription();
             capture(response, imageExtensions, getGlobsForExtensions(imageExtensions, ";"));
         } else if (type==-9999) {
+            checkPhotoLibraryUsageDescription();
+            checkAppleMusicUsageDescription();
             String[] exts = Display.getInstance().getProperty("javase.openGallery.accept", "").split(",");
             
             capture(response, exts, getGlobsForExtensions(exts, ";"));
         }else{
+            checkPhotoLibraryUsageDescription();
+            checkAppleMusicUsageDescription();
             String[] exts = new String[videoExtensions.length+imageExtensions.length];
             System.arraycopy(videoExtensions, 0, exts,0, videoExtensions.length);
             System.arraycopy(imageExtensions, 0, exts, videoExtensions.length, imageExtensions.length);
@@ -7866,11 +8072,103 @@ public class JavaSEPort extends CodenameOneImplementation {
         }
     }
 
+    private boolean cameraUsageDescriptionChecked;
+    
+    private void checkCameraUsageDescription() {
+        if (!cameraUsageDescriptionChecked) {
+            cameraUsageDescriptionChecked = true;
+            
+            Map<String, String> m = Display.getInstance().getProjectBuildHints();
+            if(m != null) {
+                if(!m.containsKey("ios.NSCameraUsageDescription")) {
+                    Display.getInstance().setProjectBuildHint("ios.NSCameraUsageDescription", "Some functionality of the application requires your camera");
+                }
+            }
+        }
+    }
+    
+    private boolean contactsUsageDescriptionChecked;
+    
+    private void checkContactsUsageDescription() {
+        if (!contactsUsageDescriptionChecked) {
+            contactsUsageDescriptionChecked = true;
+            
+            Map<String, String> m = Display.getInstance().getProjectBuildHints();
+            if(m != null) {
+                if(!m.containsKey("ios.NSContactsUsageDescription")) {
+                    Display.getInstance().setProjectBuildHint("ios.NSContactsUsageDescription", "Some functionality of the application requires access to your contacts");
+                }
+            }
+        }
+    }
+    
+    private boolean photoLibraryUsageDescriptionChecked;
+    
+    private void checkPhotoLibraryUsageDescription() {
+        if (!photoLibraryUsageDescriptionChecked) {
+            photoLibraryUsageDescriptionChecked = true;
+            
+            Map<String, String> m = Display.getInstance().getProjectBuildHints();
+            if(m != null) {
+                if(!m.containsKey("ios.NSPhotoLibraryUsageDescription")) {
+                    Display.getInstance().setProjectBuildHint("ios.NSPhotoLibraryUsageDescription", "Some functionality of the application requires access to your photo library");
+                }
+            }
+        }
+    }
+    
+    private boolean appleMusicUsageDescriptionChecked;
+    
+    private void checkAppleMusicUsageDescription() {
+        if (!appleMusicUsageDescriptionChecked) {
+            appleMusicUsageDescriptionChecked = true;
+            
+            Map<String, String> m = Display.getInstance().getProjectBuildHints();
+            if(m != null) {
+                if(!m.containsKey("ios.NSAppleMusicUsageDescription")) {
+                    Display.getInstance().setProjectBuildHint("ios.NSAppleMusicUsageDescription", "Some functionality of the application requires access to your media library");
+                }
+            }
+        }
+    }
+    
+    private boolean photoLibraryAddUsageDescriptionChecked;
+    
+    private void checkPhotoLibraryAddUsageDescription() {
+        if (!photoLibraryAddUsageDescriptionChecked) {
+            photoLibraryAddUsageDescriptionChecked = true;
+            
+            Map<String, String> m = Display.getInstance().getProjectBuildHints();
+            if(m != null) {
+                if(!m.containsKey("ios.NSPhotoLibraryAddUsageDescription")) {
+                    Display.getInstance().setProjectBuildHint("ios.NSPhotoLibraryAddUsageDescription", "Some functionality of the application requires write-only access to your photo library");
+                }
+            }
+        }
+    }
+    
+    
+    private boolean microphoneUsageDescriptionChecked;
+    
+    private void checkMicrophoneUsageDescription() {
+        if (!microphoneUsageDescriptionChecked) {
+            microphoneUsageDescriptionChecked = true;
+            
+            Map<String, String> m = Display.getInstance().getProjectBuildHints();
+            if(m != null) {
+                if(!m.containsKey("ios.NSMicrophoneUsageDescription")) {
+                    Display.getInstance().setProjectBuildHint("ios.NSMicrophoneUsageDescription", "Some functionality of the application requires your microphone");
+                }
+            }
+        }
+    }
+    
     @Override
     public void capturePhoto(final com.codename1.ui.events.ActionListener response) {
         if(!checkForPermission("android.permission.WRITE_EXTERNAL_STORAGE", "This is required to take a picture")){
             return;
         }
+        checkCameraUsageDescription();
         capture(response, new String[] {"png", "jpg", "jpeg"}, "*.png;*.jpg;*.jpeg");
     }
     
@@ -7920,6 +8218,7 @@ public class JavaSEPort extends CodenameOneImplementation {
         if(!checkForPermission("android.permission.RECORD_AUDIO", "This is required to record the audio")){
             return;
         }
+        checkMicrophoneUsageDescription();
         capture(response, new String[] {"wav", "mp3", "aac"}, "*.wav;*.mp3;*.aac");
     }
 
@@ -7928,6 +8227,8 @@ public class JavaSEPort extends CodenameOneImplementation {
         if(!checkForPermission("android.permission.WRITE_EXTERNAL_STORAGE", "This is required to take a video")){
             return;
         }
+        checkCameraUsageDescription();
+        checkMicrophoneUsageDescription();
         capture(response, new String[] {"mp4", "avi", "mpg", "3gp"}, "*.mp4;*.avi;*.mpg;*.3gp");
     }
 
@@ -8431,6 +8732,15 @@ public class JavaSEPort extends CodenameOneImplementation {
             System.out.println("ERROR: resources cannont be nested in directories in Codename One! Invalid resource: " + resource);
             return null;
         }
+        
+        if(resource.indexOf("notification_sound") > -1) {
+            throw new RuntimeException("notification_sound is a reserved file name and can't be used in getResource()!");
+        }
+        
+        if(resource.startsWith("raw")) {
+            throw new RuntimeException("Files starting with 'raw' are reserved file names and can't be used in getResource()!");
+        }
+        
         if (baseResourceDir != null) {
             try {
                 File f = new File(baseResourceDir, resource);
@@ -8621,6 +8931,16 @@ public class JavaSEPort extends CodenameOneImplementation {
             d.setProperty("package_name", mainClass);
         }
         super.registerPush(meta, noFallback);
+        
+        if(pushSimulation != null && pushSimulation.isVisible()) {
+            SwingUtilities.invokeLater(new Runnable() {
+                @Override
+                public void run() {
+                    JOptionPane.showMessageDialog(window, "registerForPush invoked. Use the buttons in the push simulator to send the appropriate callback to your app", 
+                            "Push Registration", JOptionPane.INFORMATION_MESSAGE);
+                }
+            });
+        }
     }
 
     @Override
@@ -9136,6 +9456,13 @@ public class JavaSEPort extends CodenameOneImplementation {
         return null;
     }
 
+    @Override
+    public String toNativePath(String path) {
+        return unfile(path);
+    }
+
+    
+    
     public String getAppHomePath() {
         if(exposeFilesystem) {
             File home = new File(System.getProperty("user.home") + File.separator + appHomeDir);
@@ -9206,6 +9533,7 @@ public class JavaSEPort extends CodenameOneImplementation {
     }
     
     private Hashtable initContacts() {
+        checkContactsUsageDescription();
         Hashtable retVal = new Hashtable();
         
         Image img = null;
@@ -10109,5 +10437,5 @@ public class JavaSEPort extends CodenameOneImplementation {
             return;
         }
         throw new RuntimeException("Illegal state, file not found: " + cnopFile.getAbsolutePath());
-   }    
+   }  
 }

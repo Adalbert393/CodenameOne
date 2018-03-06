@@ -292,8 +292,10 @@ public class Toolbar extends Container {
         if(onTopSideMenu) {
             if(sidemenuDialog != null && sidemenuDialog.isShowing()) {
                 sidemenuDialog.disposeToTheLeft();
-                Style s = getComponentForm().getLayeredPane(Toolbar.class, false).getUnselectedStyle();
+                Container cnt = getComponentForm().getFormLayeredPane(Toolbar.class, false);
+                Style s = cnt.getUnselectedStyle();
                 s.setBgTransparency(0);
+                cnt.remove();
             } 
         } else {
             SideMenuBar.closeCurrentMenu();
@@ -442,7 +444,11 @@ public class Toolbar extends Container {
                 // we now internally fallback to as arrow...
             case AS_ARROW:
                 cmd.setCommandName("");
-                cmd.setIcon(FontImage.createMaterial(FontImage.MATERIAL_ARROW_BACK, "TitleCommand", iconSize));
+                if(!isRTL()) {
+                    cmd.setIcon(FontImage.createMaterial(FontImage.MATERIAL_ARROW_BACK, "TitleCommand", iconSize));
+                } else {
+                    cmd.setIcon(FontImage.createMaterial(FontImage.MATERIAL_ARROW_FORWARD, "TitleCommand", iconSize));
+                }
                 addCommandToLeftBar(cmd);
                 break;
             case AS_REGULAR_COMMAND:
@@ -894,7 +900,7 @@ public class Toolbar extends Container {
             sidemenuDialog.getTitleComponent().remove();
             sidemenuDialog.add(BorderLayout.CENTER, permanentSideMenuContainer);
             if(sidemenuSouthComponent != null) {
-                sidemenuDialog.add(BorderLayout.SOUTH, permanentSideMenuContainer);
+                sidemenuDialog.add(BorderLayout.SOUTH, sidemenuSouthComponent);
             }
             float size = 4.5f;
             try {
@@ -1001,7 +1007,8 @@ public class Toolbar extends Container {
         }
         
         float f = ((float)v) / ((float)dw) * 80.0f;
-        Style s = getComponentForm().getLayeredPane(Toolbar.class, false).getUnselectedStyle();
+        Container cnt = getComponentForm().getFormLayeredPane(Toolbar.class, false);
+        Style s = cnt.getUnselectedStyle();
         s.setBgTransparency((int)f);
         s.setBgColor(0);
         
@@ -1162,6 +1169,9 @@ public class Toolbar extends Container {
     public void addCommandToRightBar(Command cmd) {
         checkIfInitialized();
         cmd.putClientProperty("TitleCommand", Boolean.TRUE);
+        if(isRTL()) {
+            cmd.putClientProperty("Left", Boolean.TRUE);
+        }
         sideMenu.addCommand(cmd, 0);        
     }
     
@@ -1187,7 +1197,9 @@ public class Toolbar extends Container {
     public void addCommandToLeftBar(Command cmd) {
         checkIfInitialized();
         cmd.putClientProperty("TitleCommand", Boolean.TRUE);
-        cmd.putClientProperty("Left", Boolean.TRUE);
+        if(!isRTL()) {
+            cmd.putClientProperty("Left", Boolean.TRUE);
+        }
         sideMenu.addCommand(cmd, 0);
     }
     

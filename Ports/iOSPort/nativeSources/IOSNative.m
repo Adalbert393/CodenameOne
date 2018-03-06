@@ -243,6 +243,7 @@ extern void Java_com_codename1_impl_ios_IOSImplementation_scale(float x, float y
 extern int isIPad();
 extern int isIOS7();
 extern int isIOS8();
+extern int isIOS8_2();
 
 NSString* fixFilePath(NSString* ns) {
     if([ns hasPrefix:@"file:"]) {
@@ -320,6 +321,23 @@ JAVA_INT com_codename1_impl_ios_IOSNative_getDisplayHeight__(CN1_THREAD_STATE_MU
     return i;
     //XMLVM_END_WRAPPER
 }
+
+JAVA_OBJECT com_codename1_impl_ios_IOSNative_getClipboardString___R_java_lang_String(CN1_THREAD_STATE_MULTI_ARG JAVA_OBJECT instanceObject) {
+    POOL_BEGIN();
+    UIPasteboard *pasteboard = [UIPasteboard generalPasteboard];
+    JAVA_OBJECT str = fromNSString(CN1_THREAD_STATE_PASS_ARG pasteboard.string);
+    POOL_END();
+    return str;
+}
+
+void com_codename1_impl_ios_IOSNative_setClipboardString___java_lang_String(CN1_THREAD_STATE_MULTI_ARG JAVA_OBJECT instanceObject, JAVA_OBJECT str) {
+    POOL_BEGIN();
+    NSString* ns = toNSString(CN1_THREAD_STATE_PASS_ARG str);
+    UIPasteboard *pasteboard = [UIPasteboard generalPasteboard];
+    pasteboard.string = ns;
+    POOL_END();
+}
+
 
 void retainCN1(CN1_THREAD_STATE_MULTI_ARG JAVA_OBJECT o){
     com_codename1_impl_ios_IOSImplementation_retain___java_lang_Object(CN1_THREAD_STATE_PASS_ARG o);
@@ -1670,7 +1688,11 @@ JAVA_BOOLEAN com_codename1_impl_ios_IOSNative_canExecute___java_lang_String(CN1_
     __block JAVA_BOOLEAN result;
     dispatch_sync(dispatch_get_main_queue(), ^{
         POOL_BEGIN();
+        
         NSString* ns = toNSString(CN1_THREAD_GET_STATE_PASS_ARG url);
+        if([ns hasPrefix:@"file:"]) {
+            ns = [NSURL fileURLWithPath:[ns substringFromIndex:5]];
+        }
         result = [[UIApplication sharedApplication] canOpenURL:[NSURL URLWithString:ns]];
         POOL_END();
     });
@@ -2225,8 +2247,8 @@ void com_codename1_impl_ios_IOSNative_setNativeBrowserScrollingEnabled___long_bo
         POOL_BEGIN();
         UIWebView* w = (BRIDGE_CAST UIWebView*)((void *)peer);
         
-        w.scrollView.scrollEnabled = NO;
-        w.scrollView.bounces = NO;
+        w.scrollView.scrollEnabled = enabled;
+        w.scrollView.bounces = enabled;
         
         POOL_END();
     });
@@ -2240,6 +2262,28 @@ void com_codename1_impl_ios_IOSNative_setBrowserURL___long_java_lang_String(CN1_
         NSURL* nu = [NSURL URLWithString:str];
         NSURLRequest* r = [NSURLRequest requestWithURL:nu];
         [w loadRequest:r];
+        POOL_END();
+    });
+}
+
+void com_codename1_impl_ios_IOSNative_setBrowserURL___long_java_lang_String_java_lang_String_1ARRAY_java_lang_String_1ARRAY(CN1_THREAD_STATE_MULTI_ARG JAVA_OBJECT instanceObject, JAVA_LONG peer, JAVA_OBJECT url, JAVA_OBJECT keys, JAVA_OBJECT values) {
+    dispatch_sync(dispatch_get_main_queue(), ^{
+        POOL_BEGIN();
+        UIWebView* w = (BRIDGE_CAST UIWebView*)((void *)peer);
+        NSString *str = toNSString(CN1_THREAD_GET_STATE_PASS_ARG url);
+        NSMutableURLRequest* request = [[NSMutableURLRequest alloc] initWithURL:[NSURL URLWithString:str]];
+
+        JAVA_ARRAY_OBJECT* keyData = (JAVA_ARRAY_OBJECT*)((JAVA_ARRAY)keys)->data;
+        JAVA_ARRAY_OBJECT* valueData = (JAVA_ARRAY_OBJECT*)((JAVA_ARRAY)values)->data;
+        int count = ((JAVA_ARRAY)keys)->length;
+
+        for(int iter = 0 ; iter < count ; iter++) {
+            NSString* k = toNSString(CN1_THREAD_GET_STATE_PASS_ARG keyData[iter]);
+            NSString* v = toNSString(CN1_THREAD_GET_STATE_PASS_ARG valueData[iter]);
+            [request setValue:v forHTTPHeaderField:k];
+        }
+        
+        [w loadRequest:request];
         POOL_END();
     });
 }
@@ -4865,7 +4909,35 @@ JAVA_LONG com_codename1_impl_ios_IOSNative_createTruetypeFont___java_lang_String
     pSize *= scaleValue;
     POOL_BEGIN();
     NSString* str = toNSString(CN1_THREAD_STATE_PASS_ARG name);
-    UIFont* fnt = [UIFont fontWithName:str size:pSize];
+    
+    UIFont* fnt;
+    if(isIOS8_2() && [str hasPrefix:@"HelveticaNeue"]) {
+        if([str isEqualToString:@"HelveticaNeue-UltraLight"]) {
+            fnt = [UIFont systemFontOfSize:pSize weight:UIFontWeightUltraLight];
+        } else {
+            if([str isEqualToString:@"HelveticaNeue-Light"]) {
+                fnt = [UIFont systemFontOfSize:pSize weight:UIFontWeightLight];
+            } else {
+                if([str isEqualToString:@"HelveticaNeue-Medium"]) {
+                    fnt = [UIFont systemFontOfSize:pSize weight:UIFontWeightMedium];
+                } else {
+                    if([str isEqualToString:@"HelveticaNeue-Bold"]) {
+                        fnt = [UIFont systemFontOfSize:pSize weight:UIFontWeightBold];
+                    } else {
+                        if([str isEqualToString:@"HelveticaNeue-CondensedBlack"]) {
+                            fnt = [UIFont systemFontOfSize:pSize weight:UIFontWeightHeavy];
+                        } else {
+                            // this is probably an italic font, fallback to regular code...
+                            fnt = [UIFont fontWithName:str size:pSize];
+                        }
+                    }
+                }
+            }
+        }
+    } else {
+        fnt = [UIFont fontWithName:str size:pSize];
+    }
+    
 #ifndef CN1_USE_ARC
     [fnt retain];
 #endif
@@ -5067,7 +5139,7 @@ JAVA_OBJECT pickerStringArray = JAVA_NULL;
 int stringPickerSelection;
 NSDate* currentDatePickerDate;
 JAVA_LONG currentDatePickerDuration=-1;
-UIPopoverController* popoverControllerInstance;
+extern UIPopoverController* popoverControllerInstance;
 extern UIView *currentActionSheet;
 JAVA_LONG defaultDatePickerDate;
 
@@ -7308,7 +7380,7 @@ JAVA_VOID com_codename1_impl_ios_IOSImplementation_paintComponentBackground___ja
     }
     JAVA_OBJECT bgImageOrig = com_codename1_ui_plaf_Style_getBgImage___R_com_codename1_ui_Image(threadStateData, s);
     if (bgImageOrig == JAVA_NULL) {
-        if (com_codename1_ui_plaf_Style_getBackgroundType___R_byte(threadStateData, s) ==get_static_com_codename1_ui_plaf_Style_BACKGROUND_GRADIENT_LINEAR_VERTICAL()) {
+        if (com_codename1_ui_plaf_Style_getBackgroundType___R_byte(threadStateData, s) >=get_static_com_codename1_ui_plaf_Style_BACKGROUND_GRADIENT_LINEAR_VERTICAL()) {
             com_codename1_impl_CodenameOneImplementation_drawGradientBackground___com_codename1_ui_plaf_Style_java_lang_Object_int_int_int_int(threadStateData, __cn1ThisObject, s, nativeGraphics, x, y, width, height);
             return;
         }

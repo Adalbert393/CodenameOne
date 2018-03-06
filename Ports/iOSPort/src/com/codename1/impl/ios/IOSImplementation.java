@@ -331,9 +331,13 @@ public class IOSImplementation extends CodenameOneImplementation {
         repaintTextEditor(false);
     }
 
+    private boolean pendingEditingText;
     @Override
     public boolean isEditingText(Component c) {
         if(textEditorHidden) {
+            return false;
+        }
+        if (pendingEditingText) {
             return false;
         }
         //return c == currentEditing;
@@ -346,12 +350,19 @@ public class IOSImplementation extends CodenameOneImplementation {
             return false;
         }*/
         //return currentEditing != null;
+        
         return super.isEditingText();
     }
 
     @Override
-    public void stopTextEditing() {    
-        foldKeyboard();
+    public void stopTextEditing() {  
+        if (isAsyncEditMode()) {
+            foldKeyboard();
+        } else {
+            if (currentEditing != null) {
+                editingUpdate(currentEditing.getText(), currentEditing.getCursorPosition(), true);
+            }
+        }
     }
     
     public static void foldKeyboard() {
@@ -570,6 +581,7 @@ public class IOSImplementation extends CodenameOneImplementation {
         //  We do this because the nativeInstance.isAsyncEditMode() value changes
         // to reflect the currently edited field so it isn't a good way to keep a
         // system default.
+        pendingEditingText = false;
         String defaultAsyncEditingSetting = Display.getInstance().getProperty("ios.VKBAlwaysOpen", null);
         if (defaultAsyncEditingSetting == null) {
             defaultAsyncEditingSetting = nativeInstance.isAsyncEditMode() ? "true" : "false";
@@ -592,13 +604,14 @@ public class IOSImplementation extends CodenameOneImplementation {
                 }
                 Display.getInstance().callSerially(new Runnable() {
                     public void run() {
+                        pendingEditingText = true;
                         Display.getInstance().editString(cmp, maxSize, constraint, text, i);
                     }
                 });
                 return;
             }
             
-           if(!cmp.hasFocus()) {
+           if(cmp.isFocusable() && !cmp.hasFocus()) {
                 doNotHideTextEditorSemaphore++;
                 try {
                     cmp.requestFocus();
@@ -614,6 +627,7 @@ public class IOSImplementation extends CodenameOneImplementation {
 
                     Display.getInstance().callSerially(new Runnable() {
                         public void run() {
+                            pendingEditingText = true;
                             Display.getInstance().editString(cmp, maxSize, constraint, text, i);
                         }
                     });
@@ -656,7 +670,7 @@ public class IOSImplementation extends CodenameOneImplementation {
                 // async editing viable.  We start with half-way down the screen.
                 int keyboardClippingThresholdY = Display.getInstance().getDisplayWidth() / 2;
                 while(p != null) {
-                    if(p.isScrollableY()  && p.getAbsoluteY() < keyboardClippingThresholdY) {
+                    if(Accessor.scrollableYFlag(p)  && p.getAbsoluteY() < keyboardClippingThresholdY) {
                         break;
                     }
                     p = p.getParent();
@@ -765,6 +779,9 @@ public class IOSImplementation extends CodenameOneImplementation {
                         textEditorHidden = false;
                     }
                     boolean showToolbar = cmp.getClientProperty("iosHideToolbar") == null;
+                    if(showToolbar && Display.getInstance().getProperty("iosHideToolbar", "false").equalsIgnoreCase("true")) {
+                        showToolbar = false;
+                    }
                     if ( currentEditing != null ){
                         nativeInstance.editStringAt(x,
                                 y,
@@ -4908,9 +4925,25 @@ public class IOSImplementation extends CodenameOneImplementation {
         }
         return (int)Math.round((((float)dipCount) * ppi));
     }
-
+    
+    
+    @Override
+    public Object getPasteDataFromClipboard() {
+        String s = nativeInstance.getClipboardString();
+        if(s != null) {
+            return s;
+        }
+        return super.getPasteDataFromClipboard();
+    }
+    
     @Override
     public void copyToClipboard(Object obj) {
+        if(obj instanceof String) {
+            nativeInstance.setClipboardString((String)obj);
+            super.copyToClipboard(obj);
+            return;
+        }
+        nativeInstance.setClipboardString(null);
         super.copyToClipboard(obj);
     }
 
@@ -5130,6 +5163,9 @@ public class IOSImplementation extends CodenameOneImplementation {
 
     @Override
     public Boolean canExecute(String url) {
+        if (url.startsWith("file:")) {
+            url = "file:"+unfile(url);
+        }
         if(nativeInstance.canExecute(url)) {
             return Boolean.TRUE;
         }
@@ -5138,6 +5174,9 @@ public class IOSImplementation extends CodenameOneImplementation {
     
     @Override
     public void execute(String url) {
+        if (url.startsWith("file:")) {
+            url = "file:"+unfile(url);
+        }
         nativeInstance.execute(url);
     }
 
@@ -5209,12 +5248,6 @@ public class IOSImplementation extends CodenameOneImplementation {
     @Override
     public int getKeyboardType() {
         return Display.KEYBOARD_TYPE_VIRTUAL;
-    }
-
-    @Override
-    public Object getPasteDataFromClipboard() {
-        // TODO
-        return super.getPasteDataFromClipboard();
     }
 
     /**
@@ -5781,6 +5814,29 @@ public class IOSImplementation extends CodenameOneImplementation {
     }
 
     @Override
+    public boolean isURLWithCustomHeadersSupported() {
+        return true;
+    }        
+    
+    @Override
+    public void setBrowserURL(PeerComponent browserPeer, String url, Map<String, String> headers) {
+        url = unfile(url);
+        if(url.startsWith("jar://")) {
+            String str = StringUtil.replaceAll(nativeInstance.getResourcesDir(), " ", "%20");
+            url = "file://localhost" + str + url.substring(6);
+        } 
+        
+        String[] keys = new String[headers.size()];
+        headers.keySet().toArray(keys);
+        String[] values = new String[keys.length];
+        for(int iter = 0 ; iter < keys.length ; iter++) {
+            values[iter] = headers.get(keys[iter]);
+        }
+        
+        nativeInstance.setBrowserURL(get(browserPeer), url, keys, values);
+    }
+
+    @Override
     public void setBuiltinSoundsEnabled(boolean enabled) {
         // TODO
         super.setBuiltinSoundsEnabled(enabled);
@@ -5866,7 +5922,11 @@ public class IOSImplementation extends CodenameOneImplementation {
                 if(lightweightMode != l) {
                     lightweightMode = l;
                     nativeInstance.peerSetVisible(nativePeer[0], !lightweightMode);
-                    getComponentForm().repaint();
+                    // fix for https://groups.google.com/d/msg/codenameone-discussions/LKxy16PhYEY/bvusdq-ICwAJ
+                    Form f = getComponentForm();
+                    if(f != null) {
+                        f.repaint();
+                    }
                 }
             }
         }
@@ -6626,6 +6686,13 @@ public class IOSImplementation extends CodenameOneImplementation {
         return nativeInstance.getFileSize(getStorageDirectory() + "/" + name);
     }
 
+    @Override
+    public String toNativePath(String path) {
+        return unfile(path);
+    }
+
+    
+    
     /**
      * @inheritDoc
      */
@@ -6647,7 +6714,7 @@ public class IOSImplementation extends CodenameOneImplementation {
         int rlen = roots.length;
         for(int iter = 0 ; iter < rlen ; iter++) {
             if(roots[iter].startsWith("/")) {
-                roots[iter] = "file:/" + roots[iter];
+                roots[iter] = "file://" + roots[iter];
             }
             if(!roots[iter].endsWith("/")) {
                 roots[iter] = roots[iter] + "/";
@@ -6736,11 +6803,14 @@ public class IOSImplementation extends CodenameOneImplementation {
     }
 
     private String unfile(String file) {
-        if(file.startsWith("file:/")) {
-            file = file.substring(5);
-            if(file.startsWith("//")) {
-                 file = file.substring(1);
-            }
+        if (file.startsWith("file:///")) {
+            return file.substring(7);
+        }
+        if (file.startsWith("file://")) {
+            return file.substring(6);
+        }
+        if (file.startsWith("file:/")) {
+            return file.substring(5);
         }
         return file;
     }
@@ -7261,7 +7331,7 @@ public class IOSImplementation extends CodenameOneImplementation {
         if(instance.life != null) {
             instance.life.applicationDidEnterBackground();
             if (instance.isEditingText()) {
-                foldKeyboard();
+                instance.stopTextEditing();
             }
         }
     }

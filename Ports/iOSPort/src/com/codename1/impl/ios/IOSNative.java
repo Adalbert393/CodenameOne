@@ -189,6 +189,9 @@ public final class IOSNative {
     native void releasePeer(long peer);
     native void retainPeer(long peer);
 
+    native void setClipboardString(String s);
+    native String getClipboardString();
+    
     native void setPinchToZoomEnabled(long peer, boolean e);
     native void setNativeBrowserScrollingEnabled(long peer, boolean e);
     native long createBrowserComponent(Object bc);
@@ -196,6 +199,7 @@ public final class IOSNative {
     native void setBrowserPage(long browserPeer, String html, String baseUrl);
 
     native void setBrowserURL(long browserPeer, String url);
+    native void setBrowserURL(long browserPeer, String url, String[] keys, String[] values);
     
     native void setBrowserUserAgent(long browserPeer, String ua);
     
